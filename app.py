@@ -3815,8 +3815,8 @@ _TDM_REPORTERS = {
         "Argentina": ("AR", "205714"),
     },
     "soybeanmeal": {
-        "Brazil":    ("BR", "230400"),
-        "Argentina": ("AR", "230400"),
+        "Brazil":    ("BR", "205717"),
+        "Argentina": ("AR", "205717"),
     },
     "wheat": {
         "Canada":    ("CA", "205713"),
