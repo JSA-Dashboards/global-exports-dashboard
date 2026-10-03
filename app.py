@@ -16,10 +16,13 @@ Data sources:
 """
 
 import streamlit as st
+from pathlib import Path
+
+_FAVICON = Path(__file__).parent / "jsa_favicon.png"
 
 st.set_page_config(
     page_title="JSA Global Export Dashboard",
-    page_icon="🌍",
+    page_icon=str(_FAVICON) if _FAVICON.exists() else "🌍",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
