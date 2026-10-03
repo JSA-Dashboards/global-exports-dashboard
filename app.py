@@ -626,9 +626,9 @@ def _cy_estimate_months(field: str, cutoffs: dict[str, str],
 # ─────────────────────────────────────────────────────────────────────────────
 # FORECAST CONFIG & MODELS
 # ─────────────────────────────────────────────────────────────────────────────
-# WASDE export forecasts — update _FORECAST_CONFIG + _WASDE_AS_OF after each
-# monthly WASDE release (apps.fas.usda.gov is firewalled from Streamlit Cloud).
-# All values in thousand metric tons (TMT) per USDA convention.
+# USDA export forecasts come live from the PSD API (api.fas.usda.gov); see
+# _load_wasde_forecasts below. _FORECAST_CONFIG is only a STALE fallback for when PSD
+# cannot be reached. All values in thousand metric tons (TMT) per USDA convention.
 
 _WASDE_AS_OF = "August 2025"   # ← update this string after each WASDE release
 
@@ -659,88 +659,93 @@ _FORECAST_CONFIG = {
 }
 
 
+_PSD_CODES = {"corn": "0440000", "soybeans": "2222000", "soybeanmeal": "0813100", "wheat": "0410000"}
+# PSD uses FIPS-style country codes (Ukraine = UP, EU = E4), not ISO.
+_PSD_COUNTRY = {
+    "US": "US", "Brazil": "BR", "Argentina": "AR", "Ukraine": "UP",
+    "Canada": "CA", "Russia": "RS", "EU": "E4", "Australia": "AS",
+}
+_PSD_NON_US = {
+    "corn": ["Brazil", "Argentina", "Ukraine"],
+    "soybeans": ["Brazil", "Argentina"],
+    "soybeanmeal": ["Brazil", "Argentina"],
+}
+_PSD_MAJOR = {
+    "corn": ["US", "Brazil", "Argentina", "Ukraine"],
+    "soybeans": ["US", "Brazil", "Argentina"],
+    "soybeanmeal": ["US", "Brazil", "Argentina"],
+}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_wasde_forecasts() -> tuple:
-    """
-    Try to fetch WASDE export forecasts (PSD attribute 88) through
-    api.fas.usda.gov — same gateway as ESR, reachable from Streamlit Cloud.
-    Returns (forecast_dict, source_str). Falls back to _FORECAST_CONFIG on failure.
-    """
-    _PSD_CODES = {
-        "corn": "0440000", "soybeans": "2222000",
-        "soybeanmeal": "2226000", "wheat": "0410000",
-    }
-    _MY_START = {"corn": 10, "soybeans": 10, "soybeanmeal": 10, "wheat": 7}
-    _CCODES = {
-        "US": "US", "Brazil": "BR", "Argentina": "AR", "Ukraine": "UA",
-        "Canada": "CA", "Russia": "RS", "EU": "E2", "Australia": "AS",
-    }
-    _NON_US = {
-        "corn": ["Brazil", "Argentina", "Ukraine"],
-        "soybeans": ["Brazil", "Argentina"],
-        "soybeanmeal": ["Brazil", "Argentina"],
-        "wheat": ["Canada", "Russia", "EU", "Ukraine", "Argentina", "Australia"],
-    }
-    _MAJOR = {
-        "corn": ["US", "Brazil", "Argentina", "Ukraine"],
-        "soybeans": ["US", "Brazil", "Argentina"],
-        "soybeanmeal": ["US", "Brazil", "Argentina"],
-    }
+def _load_wasde_forecasts(my_year: int, use_ty: bool = True) -> tuple:
+    """USDA PSD export forecasts for marketing year ``my_year`` (2026 = 2026/27), in TMT.
 
-    now = datetime.now()
+    Returns ({(commodity, field): TMT}, source). source is "live:<Month YYYY>" (the WASDE the
+    figures come from) or "fallback:<reason>" when PSD cannot be reached and the stale static
+    config is returned instead.
+
+    use_ty=True  -> trade-year (Oct-Sep) exports where PSD publishes them (corn, wheat), which is
+                    what the Oct-Sep USDA view and the TotalNonUS / MajorExporter sums compare to.
+    use_ty=False -> marketing-year exports (each country's own year), for the local-MY views.
+    "<field>_Local" keys always hold the marketing-year figure.
+    """
     result: dict = {}
-
+    as_of = (0, 0)
     try:
-        for comm, psd_code in _PSD_CODES.items():
-            my = now.year if now.month >= _MY_START[comm] else now.year - 1
-            params = urllib.parse.urlencode({
-                "commodityCode": psd_code,
-                "marketYear": my,
-                "attributeId": 88,
-                "api_key": _ESR_API_KEY,
-            })
-            with urllib.request.urlopen(
-                f"{_ESR_GATEWAY}/api/psd/data?{params}", timeout=10
-            ) as r:
+        for comm, code in _PSD_CODES.items():
+            url = (f"{_ESR_GATEWAY}/api/psd/commodity/{code}/country/all/year/{my_year}"
+                   f"?{urllib.parse.urlencode({'api_key': _ESR_API_KEY})}")
+            with urllib.request.urlopen(url, timeout=30) as r:
                 rows = json.loads(r.read())
-
-            country_vals: dict = {}
-            for row in rows:
-                code = row.get("countryCode", "")
-                val = float(row.get("value") or 0)
-                if code not in country_vals or val > country_vals[code]:
-                    country_vals[code] = val
-
-            for field, code in _CCODES.items():
-                if code in country_vals and country_vals[code] > 0:
-                    result[(comm, field)] = country_vals[code]
-
-            non_us = sum(result.get((comm, f), 0) for f in _NON_US.get(comm, []))
-            if non_us > 0:
-                result[(comm, "TotalNonUS")] = non_us
-            major = sum(result.get((comm, f), 0) for f in _MAJOR.get(comm, []))
-            if major > 0:
-                result[(comm, "MajorExporter")] = major
-
+            vals: dict = {}
+            for x in rows:
+                if x["attributeId"] in (88, 113):
+                    vals[(x["countryCode"], x["attributeId"])] = float(x["value"])
+                    as_of = max(as_of, (int(x["calendarYear"]), int(x["month"])))
+            for field, cc in _PSD_COUNTRY.items():
+                my_val = vals.get((cc, 88))
+                val = (vals.get((cc, 113)) if use_ty else None) or my_val
+                if val:
+                    result[(comm, field)] = val
+                if my_val:
+                    result[(comm, f"{field}_Local")] = my_val
+            for agg_key, comps in (("TotalNonUS", _PSD_NON_US.get(comm)),
+                                   ("MajorExporter", _PSD_MAJOR.get(comm))):
+                if comps and all((comm, c) in result for c in comps):
+                    result[(comm, agg_key)] = sum(result[(comm, c)] for c in comps)
     except Exception as _e:
         return dict(_FORECAST_CONFIG), f"fallback:{_e}"
 
     if not result:
         return dict(_FORECAST_CONFIG), "fallback:no data"
-
-    merged = dict(_FORECAST_CONFIG)
-    merged.update(result)
-    return merged, "live"
+    return result, f"live:{datetime(as_of[0], as_of[1], 1).strftime('%B %Y')}"
 
 
-def load_forecast_config() -> dict:
-    data, _ = _load_wasde_forecasts()
+def _psd_year(cy) -> int:
+    """USDA marketing-year start year from a label like "2026/27"; the current year if unparseable."""
+    try:
+        return int(str(cy).split("/")[0])
+    except (ValueError, TypeError):
+        now = datetime.now()
+        return now.year if now.month >= 10 else now.year - 1
+
+
+def load_forecast_config(cy=None, use_ty: bool = True) -> dict:
+    data, _ = _load_wasde_forecasts(_psd_year(cy), use_ty)
     return data
 
 
-def _wasde_api_source() -> str:
-    _, src = _load_wasde_forecasts()
+def _wasde_api_source(cy=None, use_ty: bool = True) -> str:
+    _, src = _load_wasde_forecasts(_psd_year(cy), use_ty)
     return src
+
+
+def _wasde_source_label(cy=None, use_ty: bool = True) -> str:
+    src = _wasde_api_source(cy, use_ty)
+    if src.startswith("live:"):
+        return f"USDA PSD (live) · {src[5:]} WASDE"
+    return f"STALE static fallback (WASDE {_WASDE_AS_OF}) — USDA PSD unreachable"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1018,6 +1023,7 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
 
     pace_info = {
         "usda_total":      usda_total,
+        "cy":              cy,
         "ytd_actual":      ytd_actual,
         "ytd_expected":    ytd_expected,
         "pace_ratio":      pace_ratio,
@@ -1666,7 +1672,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=months, y=vals, mode="lines+markers", name=year,
                 line=dict(color=color, width=width),
-                marker=dict(size=5 if is_key else 3, color=color),
+                marker=dict(size=5 if is_key else 3, color=color,
+                            line=dict(width=1.2, color="#32373c") if year == ly else None),
                 opacity=opacity, connectgaps=False,
                 legendrank=legend_rank.get(year, 500),
                 customdata=yr_hover,
@@ -1761,6 +1768,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         f"Seasonal {lbl}Shipments — {field_label} ({unit_short})",
         "Month", f"{lbl}Volume ({unit_short})",
     ))
+    fig.update_layout(legend=dict(bgcolor="#ffffff", bordercolor="#c9ced3", borderwidth=1,
+                                  font=dict(size=11, color="#32373c")))
     _add_chart_watermark(fig, logo_b64)
     return fig
 
@@ -2350,6 +2359,7 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
     pace_col = "#4caf50" if pace_pct >= 0 else "#ef5350"
     pace_sign= "+" if pace_pct >= 0 else ""
     adj_pct  = (pi.get("adj_factor", 1.0) - 1.0) * 100.0
+    _cy_lbl  = pi.get("cy") or "the current marketing year"
 
     st.markdown("---")
     st.markdown(f"### 📈 Forecast — {field_label}")
@@ -2366,7 +2376,7 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
         ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#fdd835"),
         ("Model 2 — Pace Adjusted",
          fn(pi["model2_total"]) if has_ytd else "—",
-         unit_short if has_ytd else "Need actuals",           "#00e676"),
+         unit_short if has_ytd else "Needs 1st official month", "#00e676"),
     ]
 
     for col, (label, val, unit, accent) in zip(cols, metrics):
@@ -2413,8 +2423,9 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
         st.markdown(f"""
         <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
                     margin-top:10px;font-family:Arial;font-size:12px;color:#8a9aaa;">
-          ℹ️ Pace-Adjusted forecast (Model 2) will activate once official
-          shipment data is available for the current marketing year.
+          ℹ️ Pace-Adjusted forecast (Model 2) needs at least one official month of
+          {_cy_lbl}. The first official month normally arrives 5–9 weeks after the
+          marketing year begins; until then Model 1 is the only forecast.
         </div>
         """, unsafe_allow_html=True)
 
@@ -2883,8 +2894,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # ── Forecast seasonal shares (computed from history, no input needed) ───
     # Use only the most recent 5 complete years so share distributions reflect
     # current competitive dynamics rather than older export patterns.
-    forecast_cfg    = load_forecast_config()
-    st.caption(f"📋 WASDE export forecasts: **{_WASDE_AS_OF}** — update `_FORECAST_CONFIG` in code after each monthly WASDE release.")
+    forecast_cfg    = load_forecast_config(cy)
+    st.caption(f"📋 USDA export forecasts for {cy}: **{_wasde_source_label(cy)}**")
     _share_years    = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares          = _compute_seasonal_shares(monthly_pivot, _share_years, months)
 
@@ -2893,7 +2904,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     #                                 and use a separate session-state key (_local_)
     #   All other fields            → read the standard row, standard key
     # US uses a single key (Sep-Aug ≈ Oct-Sep difference is minimal).
-    _is_local_field = bool(field in MAR_FEB_FIELDS and arbr_local_my)
+    _is_local_field = bool((field in MAR_FEB_FIELDS and arbr_local_my)
+                           or (field == "US" and us_local_my))
     _fc_lookup      = f"{field}_Local" if _is_local_field else field
     _usda_saved     = forecast_cfg.get((commodity, _fc_lookup))   # Excel default, may be None
 
@@ -2995,14 +3007,14 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         )
         usda_total = derived_total if derived_total > 0 else None
     else:
-        _raw = forecast_cfg.get((commodity, field))
+        _raw = forecast_cfg.get((commodity, _fc_lookup)) or forecast_cfg.get((commodity, field))
         usda_total = (float(_raw) * unit_factor if use_bushels else float(_raw)) if _raw else None
 
     with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(usda_total)):
         _fc1, _fc2 = st.columns([2, 3])
         with _fc1:
             if usda_total:
-                _src_lbl = "USDA API (live)" if _wasde_api_source() == "live" else f"WASDE {_WASDE_AS_OF} (static)"
+                _src_lbl = _wasde_source_label(cy)
                 st.markdown(
                     f'<div style="font-family:Arial;font-size:13px;">'
                     f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
@@ -3496,8 +3508,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     # ── Forecast seasonal shares ──────────────────────────────────────────
     # Limit to recent 5 complete years for share computation.
-    forecast_cfg    = load_forecast_config()
-    st.caption(f"📋 WASDE export forecasts: **{_WASDE_AS_OF}** — update `_FORECAST_CONFIG` in code after each monthly WASDE release.")
+    forecast_cfg    = load_forecast_config(cy, use_ty=False)
+    st.caption(f"📋 USDA export forecasts for {cy}: **{_wasde_source_label(cy, use_ty=False)}**")
     _usda_saved_w   = forecast_cfg.get(("wheat", field))
     _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)
@@ -3582,7 +3594,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
             _fw1, _fw2 = st.columns([2, 3])
             with _fw1:
                 if usda_total_w:
-                    _src_lbl_w = "USDA API (live)" if _wasde_api_source() == "live" else f"WASDE {_WASDE_AS_OF} (static)"
+                    _src_lbl_w = _wasde_source_label(cy, use_ty=False)
                     st.markdown(
                         f'<div style="font-family:Arial;font-size:13px;">'
                         f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
