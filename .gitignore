@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+watermark.json
+*.p8
+*.pem
+.streamlit/secrets.toml

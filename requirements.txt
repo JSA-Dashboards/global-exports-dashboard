@@ -1,0 +1,9 @@
+streamlit>=1.35
+pandas>=2.0
+numpy>=1.24
+plotly>=5.18
+python-dotenv>=1.0
+msal>=1.28
+requests>=2.31
+snowflake-connector-python>=3.6
+cryptography>=41
