@@ -37,7 +37,7 @@ import urllib.parse
 import urllib.request
 import ssl
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 
@@ -601,7 +601,7 @@ def _us_fgis_est_months(commodity: str, cy: str, months: list,
                          my_start_month: int = 10) -> set:
     """
     Return the set of MY month abbreviations (e.g. {"Jul", "Aug"}) in the
-    current MY that have FGIS-filled data but no Census GATS data.
+    current MY that Census GATS has not published yet (filled by an estimate where one exists).
     These are shown as EST — indicative only, not final Census figures.
     """
     gats_keys = _load_census_gats_keys(commodity)
@@ -898,13 +898,76 @@ def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+# USDA ESR commodity codes used to estimate US months Census has not published yet: the same
+# set and method as the daily email (etl.us_series), so the two show the same US number.
+_US_ESR_CODE = {"corn": 401, "soybeans": 801, "soybeanmeal": 901}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _esr_us_monthly(esr_code: int) -> tuple:
+    """US weekly export shipments (USDA ESR) spread evenly over the days each week covers.
+    Returns ({(year, month): TMT}, date of the latest week-ending or None)."""
+    yr = datetime.now().year
+    weeks: dict = {}
+    for my in (yr - 1, yr, yr + 1):
+        for x in _load_esr_exports(esr_code, my):
+            try:
+                wk = datetime.fromisoformat(str(x["weekEndingDate"])[:19]).date()
+                weeks[wk] = weeks.get(wk, 0.0) + float(x.get("weeklyExports") or 0)
+            except (KeyError, ValueError, TypeError):
+                continue
+    if not weeks:
+        return {}, None
+    out: dict = {}
+    for end, total in weeks.items():
+        for i in range(7):
+            d = end - timedelta(days=i)
+            out[(d.year, d.month)] = out.get((d.year, d.month), 0.0) + total / 7 / 1000.0
+    return out, max(weeks)
+
+
+def _us_estimates(esr_code: int, census: dict) -> dict:
+    """Months after Census's latest: ESR shipments scaled by the last 3 months' Census/ESR ratio,
+    only for months ESR has fully reported (identical to the email's etl.us_series)."""
+    esr, last_wk = _esr_us_monthly(esr_code)
+    if not esr or not last_wk or not census:
+        return {}
+    cal = [k for k in sorted(census) if k in esr][-3:]
+    if len(cal) < 3:
+        return {}
+    ratio = sum(census[k] for k in cal) / sum(esr[k] for k in cal)
+    if not 0.7 <= ratio <= 1.3:
+        return {}
+    est: dict = {}
+    y, m = max(census)
+    while True:
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        month_end = datetime(y + (m == 12), m % 12 + 1, 1).date() - timedelta(days=1)
+        if (y, m) not in esr or month_end > last_wk:
+            break
+        est[(y, m)] = esr[(y, m)] * ratio
+    return est
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_us_auto(commodity: str) -> dict:
-    """Blended GATS + FGIS US monthly exports → {(year, month): tmt}.
-    GATS is primary (official, ~6-8 wk lag); FGIS extends forward for recent months.
+    """US monthly exports → {(year, month): tmt}.
+
+    Census GATS is official (~5-6 week lag). For corn, soybeans and meal, months Census has not
+    published yet are estimated from USDA ESR export shipments scaled to Census, the same method
+    as the daily email, so the dashboard and the email agree on the US number.
+    Wheat, and any case where Census is unavailable, keeps the older FGIS-inspections fill below.
+
     FGIS is capped at the previous complete calendar month — the current month is
     always partial (FGIS reports weekly; mid-month only a fraction of weeks are in).
     """
+    esr_code = _US_ESR_CODE.get(commodity)
+    if esr_code:
+        census = {(int(r["year"]), int(r["month"])): float(r["tmt"])
+                  for _, r in _load_census_gats(commodity).iterrows()}
+        if census:
+            return {**_us_estimates(esr_code, census), **census}
+
     now = pd.Timestamp.now()
     # Last fully-complete calendar month (current month is always partial in FGIS)
     prev = now.replace(day=1) - pd.Timedelta(days=1)      # last day of the previous month
@@ -2947,9 +3010,11 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
         "border-radius:3px;color:#ffe082;font-weight:600;"
     )
+    _est_how = (" — USDA export shipments scaled to Census"
+                if field == "US" and commodity in _US_ESR_CODE else "")
     _est_legend_item = (
         f'<span><span style="{_est_badge_style}">EST</span>'
-        f'&nbsp;Estimate (not yet official)</span>'
+        f'&nbsp;Estimate (not yet official{_est_how})</span>'
         if has_estimates else ""
     )
     st.markdown(
