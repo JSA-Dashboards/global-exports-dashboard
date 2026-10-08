@@ -503,7 +503,8 @@ def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data(commodity: str) -> pd.DataFrame:
-    """Build monthly export DataFrame from APIs (Census GATS/FGIS for US; TDM for non-US)."""
+    """Build monthly export DataFrame from APIs (Census GATS/FGIS for US; TDM for non-US).
+    Non-US comes from Snowflake and raises if it cannot be read, so a failure is never cached."""
     cfg  = COMMODITY_CONFIG[commodity]
     now  = pd.Timestamp.now().replace(day=1)
     dates = pd.date_range("2010-01-01", now, freq="MS")
