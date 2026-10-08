@@ -52,9 +52,10 @@ if _basis_env.exists():
 
 
 # ── Snowflake connection ──────────────────────────────────────────────────────
-@st.cache_resource
+@st.cache_resource(ttl=1800)
 def _get_sf_conn():
-    """Return a live Snowflake connection (cached per session)."""
+    """Return a live Snowflake connection, rebuilt every 30 min. An idle session expires after a
+    few hours, and a connection cached forever then fails every query for the life of the process."""
     import snowflake.connector
     from cryptography.hazmat.primitives.serialization import (
         load_pem_private_key, Encoding, PrivateFormat, NoEncryption,
@@ -87,25 +88,33 @@ def _get_sf_conn():
         warehouse = _s("SNOWFLAKE_WAREHOUSE") or "COMPUTE_WH",
         database  = "EXPORTS",
         schema    = "PUBLIC",
+        client_session_keep_alive = True,
     )
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_tdm_from_snowflake(reporter: str, product_code: str) -> dict:
-    """Read TDM monthly data from Snowflake → {(year, month): tmt}."""
-    conn = _get_sf_conn()
-    if conn is None:
-        return {}
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT year, month, tmt FROM TDM_MONTHLY "
-            "WHERE reporter=%s AND product_code=%s",
-            (reporter, product_code),
-        )
-        return {(int(r[0]), int(r[1])): float(r[2]) for r in cur.fetchall()}
-    except Exception:
-        return {}
+    """Read TDM monthly data from Snowflake → {(year, month): tmt}.
+
+    Raises on failure instead of returning {}: st.cache_data would otherwise cache the empty
+    result for an hour and the dashboard would quietly show US-only data. A dead cached
+    connection is dropped and retried once."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT year, month, tmt FROM TDM_MONTHLY "
+                "WHERE reporter=%s AND product_code=%s",
+                (reporter, product_code),
+            )
+            return {(int(r[0]), int(r[1])): float(r[2]) for r in cur.fetchall()}
+        except Exception:
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()       # the cached connection may have expired: reconnect
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -897,7 +906,7 @@ def _load_us_auto(commodity: str) -> dict:
     """
     now = pd.Timestamp.now()
     # Last fully-complete calendar month (current month is always partial in FGIS)
-    prev = now - pd.offsets.MonthBegin(1)
+    prev = now.replace(day=1) - pd.Timedelta(days=1)      # last day of the previous month
     fgis_cap = (int(prev.year), int(prev.month))
 
     records: dict = {}
@@ -2729,8 +2738,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     try:
         df = load_data(commodity)
     except Exception as exc:
-        st.error(f"Error loading {cfg['label']} data: {exc}")
-        st.stop()
+        st.error(f"Error loading {cfg['label']} data: {exc}\n\nClick **🔄 Refresh Data** to retry.")
+        return
 
     FIELDS         = cfg["fields"]
     MAR_FEB_FIELDS = cfg["mar_feb_fields"]
@@ -3372,8 +3381,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     try:
         df = load_data("wheat")
     except Exception as exc:
-        st.error(f"Error loading Wheat data: {exc}")
-        st.stop()
+        st.error(f"Error loading Wheat data: {exc}\n\nClick **🔄 Refresh Data** to retry.")
+        return
 
     # Only expose fields that actually exist in the loaded dataframe
     FIELDS = {k: v for k, v in cfg["fields"].items() if k in df.columns}
@@ -4631,14 +4640,17 @@ def _run_export_inspections_tab():
             )
         fd, fe = st.columns(2)
         with fd:
-            week_range = st.slider(
-                "Week Range (ISO week)",
-                min_value=int(min(all_weeks)) if all_weeks else 1,
-                max_value=int(max(all_weeks)) if all_weeks else 52,
-                value=(int(min(all_weeks)) if all_weeks else 1,
-                       int(max(all_weeks)) if all_weeks else 52),
-                key="insp_week_range",
-            )
+            _wk_lo = int(min(all_weeks)) if all_weeks else 1
+            _wk_hi = int(max(all_weeks)) if all_weeks else 52
+            if _wk_lo < _wk_hi:
+                week_range = st.slider(
+                    "Week Range (ISO week)",
+                    min_value=_wk_lo, max_value=_wk_hi, value=(_wk_lo, _wk_hi),
+                    key="insp_week_range",
+                )
+            else:       # a slider needs min < max: early in a marketing year only one week is in
+                week_range = (_wk_lo, _wk_hi)
+                st.caption(f"Week range: ISO week {_wk_lo} (only one week reported so far)")
         with fe:
             top_n_dests = st.slider("Top N destinations", 5, 40, 20,
                                     key="insp_top_n")
@@ -5343,9 +5355,11 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
     )
     dest_col = _ESR_METRICS.get(dest_metric_label, "ytd_exports")
 
+    # dest_col is often one of the other columns (the default is ytd_exports); pandas 3 rejects
+    # a duplicated label in the column selection, so de-duplicate it.
+    _agg_cols = list(dict.fromkeys([dest_col, "outstanding", "ytd_exports", "net_sales", "ytd_commit"]))
     dest_agg = (
-        latest.groupby("country")[[dest_col, "outstanding", "ytd_exports",
-                                   "net_sales", "ytd_commit"]].sum()
+        latest.groupby("country")[_agg_cols].sum()
         .reset_index().sort_values(dest_col, ascending=True)
     )
     top_dest_df = dest_agg.tail(top_n_dest)
@@ -5957,6 +5971,7 @@ def main():
     with col_btn:
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
+            st.cache_resource.clear()
             st.toast("Data cache cleared — reloading…", icon="🔄")
             st.rerun()
 
