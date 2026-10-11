@@ -74,7 +74,10 @@ def _get_sf_conn():
     if key_path:
         pem = Path(key_path).expanduser().read_bytes()
     elif key_b64:
-        pem = base64.b64decode(key_b64)
+        # Raw PEM text (what the admin portal's shared secret holds) or base64 of the PEM
+        # (this app's own Cloud secret).
+        _kb = key_b64.encode() if isinstance(key_b64, str) else key_b64
+        pem = _kb.replace(b"\\n", b"\n") if b"-----BEGIN" in _kb else base64.b64decode(_kb)
     else:
         return None
 
