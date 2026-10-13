@@ -2107,7 +2107,7 @@ def _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
     if pg["strict_thru"] == "Sep":
         base = f"{fn(pg['strict_cum'])} {unit_short} (full year)"
     elif pg["missing"]:
-        base = (f"{fn(pg['cum'])} {unit_short} thru {pg['thru']}, excluding "
+        base = (f"{fn(pg['cum'])} {unit_short} thru {pg['thru']}, excl. "
                 f"{', '.join(pg['missing'])} {pg['thru']} (pending)")
     else:
         base = f"{fn(pg['strict_cum'])} {unit_short} thru {pg['strict_thru']}"
@@ -2116,7 +2116,7 @@ def _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
         usda_ly = (float(raw) * unit_factor if use_bushels else float(raw)) if raw else None
     except Exception:
         usda_ly = None
-    tail = f" · USDA estimate {fn(usda_ly)}" if usda_ly else ""
+    tail = f" · USDA est. {fn(usda_ly)}" if usda_ly else ""
     return (f'<div style="font-family:Arial;font-size:11px;color:#5f6b76;margin-top:6px;">'
             f'Last year ({ly}): <b style="color:#32373c;">{base}</b>{tail}</div>')
 
@@ -2295,8 +2295,8 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
                 f'border:1px dashed #f9a825;border-radius:4px;font-size:9px;line-height:1.4;'
                 f'color:#ffe082;text-align:center;">'
                 f'<b>{fmt_num(pend["cum"], unit_decimals)}</b> {unit_short} thru {pend["thru"]}'
-                f'{" (incl. US est.)" if pend.get("est") else ""}'
-                f'<br>ex-{", ".join(pend["missing"])} {pend["thru"]} (pending)</div>'
+                f'<br>ex-{", ".join(pend["missing"])} {pend["thru"]} (pending)'
+                f'{"<br>incl. US estimate" if pend.get("est") else ""}</div>'
             )
 
         card = (
@@ -2319,10 +2319,10 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
             f'<div style="font-size:8.5px;font-weight:700;color:#5a6878;'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">Monthly</div>'
             f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
-            f'line-height:1.1;font-family:Arial;">{m_vol}</div>'
+            f'line-height:1.1;font-family:Arial;">{m_vol}{est_tag}</div>'
             f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">{t["latest_month"]}</span>{est_tag}'
+            f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
             f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_m"],"LY")}&nbsp;{_pct_chip(t["pct_oly_m"],"Avg")}'
@@ -2336,10 +2336,10 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
             f'<div style="font-size:8.5px;font-weight:700;color:{accent};'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">MYTD</div>'
             f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
-            f'line-height:1.1;font-family:Arial;">{c_vol}</div>'
+            f'line-height:1.1;font-family:Arial;">{c_vol}{est_tag}</div>'
             f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>{est_tag}'
+            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
             f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({my_disp})</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
