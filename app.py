@@ -2117,8 +2117,8 @@ def _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
     except Exception:
         usda_ly = None
     tail = f" · USDA estimate {fn(usda_ly)}" if usda_ly else ""
-    return (f'<div style="font-family:Arial;font-size:11px;color:#8a9aaa;margin-top:6px;">'
-            f'Last year ({ly}): <b style="color:#d0d8e0;">{base}</b>{tail}</div>')
+    return (f'<div style="font-family:Arial;font-size:11px;color:#5f6b76;margin-top:6px;">'
+            f'Last year ({ly}): <b style="color:#32373c;">{base}</b>{tail}</div>')
 
 
 def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
@@ -2278,6 +2278,9 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
         m_vol = fmt_num(t["monthly_val"], unit_decimals) if t["monthly_val"] is not None else "—"
         c_vol = fmt_num(t["cum_val"],     unit_decimals) if t["cum_val"]     is not None else "—"
 
+        # "2025/26 (USDA (Oct–Sep))" wraps on a narrow card and has nested brackets: show "(Oct–Sep)"
+        my_disp = t["my_label"].replace("USDA (Oct–Sep)", "Oct–Sep")
+
         # EST: the newest month is an estimate, not an official figure (US months Census hasn't published)
         est_tag = ('&nbsp;<span style="background:#7a5800;border:1px dashed #f9a825;padding:0 4px;'
                    'border-radius:3px;color:#ffe082;font-size:8px;font-weight:700;">EST</span>'
@@ -2337,7 +2340,7 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
             f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
             f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>{est_tag}'
-            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({t["my_label"]})</span></div>'
+            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({my_disp})</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
             f'</div>{pend_html}</div>'
@@ -3242,7 +3245,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 st.markdown(
                     f'<div style="font-family:Arial;font-size:13px;">'
                     f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                    f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                    f'<span style="font-size:24px;font-weight:700;color:#1e2124;">'
                     f'{usda_total:,.0f}</span><br>'
                     f'<span style="color:#555;font-size:11px;">{_src_lbl}</span>'
                     f'</div>',
@@ -3827,7 +3830,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                     st.markdown(
                         f'<div style="font-family:Arial;font-size:13px;">'
                         f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                        f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                        f'<span style="font-size:24px;font-weight:700;color:#1e2124;">'
                         f'{usda_total_w:,.0f}</span><br>'
                         f'<span style="color:#555;font-size:11px;">{_src_lbl_w}</span>'
                         f'</div>',
