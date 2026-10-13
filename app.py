@@ -2046,9 +2046,85 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
 # ─────────────────────────────────────────────────────────────────────────────
 # STAT TILES
 # ─────────────────────────────────────────────────────────────────────────────
+def _aggregate_progress(df, cfg, field, year, use_bushels, unit_factor,
+                        us_est_months=frozenset()):
+    """Where an Oct–Sep aggregate (Total Non-US / Major Exporters) really stands for `year`.
+
+    The aggregate only counts a month once EVERY component has reported, so one late reporter
+    (Argentina's TDM data lags a month) makes the total stop a month early and read like a full
+    year. Returns None for a non-aggregate field or a year with no data, else a dict:
+        strict_thru / strict_cum   last month all components reported, and the total through it
+        thru / cum                 the same plus the months only some components have reported
+                                   (summing just the components that have)
+        missing                    components absent from those extra months ([] = nothing pending)
+        est                        True when a pending month leans on an estimated US month
+    """
+    comps = {"TotalNonUS": cfg.get("non_us_comps"),
+             "MajorExporter": cfg.get("major_comps")}.get(field)
+    if not comps or field not in df.columns or any(c not in df.columns for c in comps):
+        return None
+
+    def _pv(f):
+        pv, _ = build_pivot(df, f)
+        return _apply_unit(pv, unit_factor) if use_bushels else pv
+
+    agg = _pv(field)
+    comp = {c: _pv(c) for c in comps}
+    strict_thru, strict_cum = None, 0.0
+    for m in OCT_SEP_MONTHS:
+        v = agg[m].get(year)
+        if v is not None:
+            strict_thru, strict_cum = m, strict_cum + v
+    if strict_thru is None:
+        return None
+    cum, thru, missing, est = strict_cum, strict_thru, [], False
+    for m in OCT_SEP_MONTHS[OCT_SEP_MONTHS.index(strict_thru) + 1:]:
+        have = {c: comp[c][m].get(year) for c in comps if comp[c][m].get(year) is not None}
+        if not have:
+            break        # nothing reported for this month, so no later month is pending either
+        cum += sum(have.values())
+        thru = m
+        missing += [c for c in comps if c not in have and c not in missing]
+        est = est or ("US" in have and m in us_est_months)
+    return dict(strict_thru=strict_thru, strict_cum=strict_cum, thru=thru, cum=cum,
+                missing=missing, est=est)
+
+
+def _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
+                     unit_short, unit_decimals) -> str:
+    """One line under the USDA forecast of an Oct–Sep aggregate: where last year actually stands, so
+    the forecast is read against the right base and a late reporter isn't mistaken for a full year."""
+    if not ly or field not in ("TotalNonUS", "MajorExporter"):
+        return ""
+    try:
+        est = _us_fgis_est_months(commodity, ly, OCT_SEP_MONTHS, my_start_month=10)
+    except Exception:
+        est = set()
+    pg = _aggregate_progress(df, cfg, field, ly, use_bushels, unit_factor, us_est_months=est)
+    if not pg:
+        return ""
+    fn = lambda v: fmt_num(v, unit_decimals)
+    if pg["strict_thru"] == "Sep":
+        base = f"{fn(pg['strict_cum'])} {unit_short} (full year)"
+    elif pg["missing"]:
+        base = (f"{fn(pg['cum'])} {unit_short} thru {pg['thru']}, excluding "
+                f"{', '.join(pg['missing'])} {pg['thru']} (pending)")
+    else:
+        base = f"{fn(pg['strict_cum'])} {unit_short} thru {pg['strict_thru']}"
+    try:
+        raw = load_forecast_config(ly).get((commodity, field))
+        usda_ly = (float(raw) * unit_factor if use_bushels else float(raw)) if raw else None
+    except Exception:
+        usda_ly = None
+    tail = f" · USDA estimate {fn(usda_ly)}" if usda_ly else ""
+    return (f'<div style="font-family:Arial;font-size:11px;color:#8a9aaa;margin-top:6px;">'
+            f'Last year ({ly}): <b style="color:#d0d8e0;">{base}</b>{tail}</div>')
+
+
 def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
                         arbr_local_my: bool = True,
-                        us_local_my: bool = True) -> list:
+                        us_local_my: bool = True,
+                        commodity: str | None = None) -> list:
     cutoffs = load_cutoff_config()   # cached — no performance cost
     tiles = []
     for field in cfg["tile_order"]:
@@ -2101,6 +2177,16 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
         # Months in the current MY that are estimates — skip these on tiles
         est_months = _cy_estimate_months(field, cutoffs, months_list)
 
+        # US months Census hasn't published yet are filled by an estimate. They stay on the tile
+        # (it is the newest read) but are flagged, instead of passing as official.
+        us_est = set()
+        if field == "US" and commodity:
+            try:
+                us_est = _us_fgis_est_months(commodity, cy, months_list,
+                                             my_start_month=9 if us_local_my else 10)
+            except Exception:
+                us_est = set()
+
         latest_month = latest_val = None
         for m in reversed(months_list):
             if m in est_months:          # only show official data on tiles
@@ -2121,6 +2207,18 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
         ly_cum  = cum_piv[latest_month].get(ly) if ly else None
         oly_cum = olympic_avg([cum_piv[latest_month].get(y) for y in oly_years])
 
+        # An aggregate stops at the last month EVERY component has reported. Say what is still
+        # pending, so e.g. Oct–Aug doesn't read like a full Oct–Sep year.
+        pending = None
+        if field in ("TotalNonUS", "MajorExporter") and my_label == "USDA (Oct–Sep)":
+            try:
+                _agg_est = (_us_fgis_est_months(commodity, cy, OCT_SEP_MONTHS, my_start_month=10)
+                            if commodity else set())
+                pending = _aggregate_progress(df, cfg, field, cy, use_bushels, unit_factor,
+                                              us_est_months=_agg_est)
+            except Exception:
+                pending = None
+
         tiles.append(dict(
             field        = field,
             label        = cfg["fields"][field],
@@ -2135,6 +2233,8 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
             cum_val      = cy_cum,
             pct_ly_c     = _pct(cy_cum, ly_cum),
             pct_oly_c    = _pct(cy_cum, oly_cum),
+            est          = latest_month in us_est,
+            pending      = pending,
         ))
     return tiles
 
@@ -2178,6 +2278,24 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
         m_vol = fmt_num(t["monthly_val"], unit_decimals) if t["monthly_val"] is not None else "—"
         c_vol = fmt_num(t["cum_val"],     unit_decimals) if t["cum_val"]     is not None else "—"
 
+        # EST: the newest month is an estimate, not an official figure (US months Census hasn't published)
+        est_tag = ('&nbsp;<span style="background:#7a5800;border:1px dashed #f9a825;padding:0 4px;'
+                   'border-radius:3px;color:#ffe082;font-size:8px;font-weight:700;">EST</span>'
+                   if t.get("est") else "")
+
+        # Aggregates stop at the last month every component reported: say what is still pending
+        pend      = t.get("pending") or {}
+        pend_html = ""
+        if pend.get("missing"):
+            pend_html = (
+                f'<div style="margin:7px 2px 0;padding:4px 5px;background:#2d2615;'
+                f'border:1px dashed #f9a825;border-radius:4px;font-size:9px;line-height:1.4;'
+                f'color:#ffe082;text-align:center;">'
+                f'<b>{fmt_num(pend["cum"], unit_decimals)}</b> {unit_short} thru {pend["thru"]}'
+                f'{" (incl. US est.)" if pend.get("est") else ""}'
+                f'<br>ex-{", ".join(pend["missing"])} {pend["thru"]} (pending)</div>'
+            )
+
         card = (
             # ── outer card ──────────────────────────────────────────────────
             f'<div style="flex:1;min-width:140px;background:#21262c;'
@@ -2201,7 +2319,7 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
             f'line-height:1.1;font-family:Arial;">{m_vol}</div>'
             f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
+            f'<span style="color:#5a6878;">{t["latest_month"]}</span>{est_tag}'
             f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_m"],"LY")}&nbsp;{_pct_chip(t["pct_oly_m"],"Avg")}'
@@ -2218,11 +2336,11 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
             f'line-height:1.1;font-family:Arial;">{c_vol}</div>'
             f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
+            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>{est_tag}'
             f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({t["my_label"]})</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
-            f'</div></div>'
+            f'</div>{pend_html}</div>'
 
             f'</div>'  # close card
         )
@@ -2812,9 +2930,25 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     MAR_FEB_FIELDS = cfg["mar_feb_fields"]
 
     # ── Stat tiles ────────────────────────────────────────────────────────
+    # One year for every tile by default. On each market's own year the row mixes years (the US
+    # already on 2026/27 while Brazil and Argentina are still on 2025/26), which reads as a
+    # mismatch next to Total Non-US and Major Exporters, which are always Oct–Sep.
+    _tile_basis = st.radio(
+        "Tiles",
+        ["USDA Oct–Sep — one year for every tile", "Each market's own marketing year"],
+        index=0, horizontal=True, key=f"{pfx}_tile_basis",
+        help=(
+            "**USDA Oct–Sep** (default) puts every tile on the same year, so they compare with each "
+            "other and with Total Non-US and Major Exporters, which are always Oct–Sep.\n\n"
+            "**Each market's own year** follows the two toggles above (US Sep–Aug, Brazil/Argentina "
+            f"{cfg['arbr_label']}), so the tiles can sit on different years."
+        ),
+    )
+    _tiles_common = _tile_basis.startswith("USDA")
     tile_stats = _compute_tile_stats(df, use_bushels, unit_factor, cfg,
-                                     arbr_local_my=arbr_local_my,
-                                     us_local_my=us_local_my)
+                                     arbr_local_my=arbr_local_my and not _tiles_common,
+                                     us_local_my=us_local_my and not _tiles_common,
+                                     commodity=commodity)
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
     st.markdown(
@@ -2828,12 +2962,17 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # Build year list from USDA MY on first available tile field
     _snap_ref_field = cfg["tile_order"][0]
     try:
-        _, _snap_all_years = build_pivot(df, _snap_ref_field)
+        _snap_ref_pivot, _snap_all_years = build_pivot(df, _snap_ref_field)
     except Exception:
-        _snap_all_years = []
+        _snap_ref_pivot, _snap_all_years = {}, []
 
-    _snap_cy     = _snap_all_years[-1] if _snap_all_years else None
-    _snap_prior  = list(reversed(_snap_all_years[:-1])) if len(_snap_all_years) > 1 else []
+    # Right after a rollover the newest MY is an empty shell (2026/27 in October): the current
+    # year is the latest one that has data, and only EARLIER years are offered as prior years.
+    _snap_filled = [y for y in _snap_all_years
+                    if any(_snap_ref_pivot[m].get(y) is not None for m in OCT_SEP_MONTHS)]
+    _snap_cy     = (_snap_filled[-1] if _snap_filled
+                    else (_snap_all_years[-1] if _snap_all_years else None))
+    _snap_prior  = [y for y in reversed(_snap_all_years) if _snap_cy and y < _snap_cy]
     _snap_opts   = [f"Current Year YTD ({_snap_cy})"] + _snap_prior if _snap_cy else []
 
     if _snap_opts:
@@ -2853,24 +2992,31 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         with _snap_ctrl2:
             _snap_local_my = st.toggle(
                 "Local MY",
-                value=True,
+                value=False,
                 key=f"{pfx}_snap_local_my",
                 help=(
-                    "**ON** (default) — US uses Sep–Aug; "
-                    f"AR/BR use {cfg['arbr_label']} (local harvest MY).\n\n"
-                    "**OFF** — USDA Oct–Sep for all countries."
+                    "**OFF** (default) — USDA Oct–Sep for all countries, so every bar is the same "
+                    "year and they compare with Total Non-US and Major Exporters.\n\n"
+                    "**ON** — each market's own year: US uses Sep–Aug; "
+                    f"AR/BR use {cfg['arbr_label']} (local harvest MY). The bars then sit on different years."
                 ),
             )
 
         _is_cy_snap = _snap_sel.startswith("Current Year")
         _sel_yr     = None if _is_cy_snap else _snap_sel
         _my_tag     = f"Local MY" if _snap_local_my else "USDA Oct–Sep"
-        _snap_label = (f"CY {_snap_cy} (YTD, {_my_tag})"
-                       if _is_cy_snap else f"Full MY {_snap_sel} ({_my_tag})")
 
         _snap_data = _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
                                             selected_year=_sel_yr,
                                             use_local_my=_snap_local_my)
+        # Title from the years actually drawn: on local years the bars can sit on different ones
+        _snap_yrs   = sorted({d["year"] for d in _snap_data})
+        if not _is_cy_snap:
+            _snap_label = f"Full MY {_snap_sel} ({_my_tag})"
+        elif len(_snap_yrs) == 1:
+            _snap_label = f"CY {_snap_yrs[0]} (YTD, {_my_tag})"
+        else:
+            _snap_label = f"Latest year per market (YTD, {_my_tag})"
         if _snap_data:
             st.plotly_chart(
                 make_snapshot_chart(_snap_data, cfg["label"], _snap_label,
@@ -3104,6 +3250,11 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 )
             else:
                 st.caption("No WASDE forecast available for this field.")
+            # Where last year actually stands, so the forecast is read against the right base
+            _ly_note = _ly_context_note(df, cfg, field, ly, commodity, use_bushels, unit_factor,
+                                        unit_short, unit_decimals)
+            if _ly_note:
+                st.markdown(_ly_note, unsafe_allow_html=True)
         with _fc2:
             st.markdown(_model_legend_html, unsafe_allow_html=True)
 
