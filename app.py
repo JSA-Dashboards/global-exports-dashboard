@@ -6141,8 +6141,10 @@ def _run_vessel_lineup_tab():
 # ─────────────────────────────────────────────────────────────────────────────
 # US EXPORT DESTINATIONS  (USDA FAS GATS / Census, cached by gats.py into Snowflake GATS_EXPORTS)
 # ─────────────────────────────────────────────────────────────────────────────
-_GATS_COMMODITIES = {"Corn": "corn", "Soybeans": "soybeans", "Soybean Meal": "soybeanmeal", "Wheat": "wheat"}
-_GATS_MBU_PER_TMT = {"corn": 0.039368, "soybeans": 0.036744, "wheat": 0.036744}   # soybean meal has no bushel unit
+_GATS_COMMODITIES = {"Corn": "corn", "Soybeans": "soybeans", "Soybean Meal": "soybeanmeal", "Wheat": "wheat",
+                    "Sorghum": "sorghum", "Canola": "canola"}
+_GATS_MBU_PER_TMT = {"corn": 0.039368, "soybeans": 0.036744, "wheat": 0.036744,
+                     "sorghum": 0.039368, "canola": 0.044092}   # soybean meal has no bushel unit
 _GATS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -6300,7 +6302,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     )
     st.caption(
         f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
-        "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum). "
+        "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
         "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
         "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
     )
