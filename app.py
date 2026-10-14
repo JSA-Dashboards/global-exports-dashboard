@@ -4137,9 +4137,10 @@ _FALLBACK_COLORS = [
 def _fetch_tdm_china(product_code: str, password: str) -> pd.DataFrame:
     """Fetch China import data from TDM; cached 1 hour."""
     import urllib.request
+    now = pd.Timestamp.now()
     url = (
         f"{TDM_BASE}?username={TDM_USER}&password={password}"
-        f"&reporter=CN&periodBegin=201401&periodEnd=202601"
+        f"&reporter=CN&periodBegin=201401&periodEnd={now.year}{now.month:02d}"
         f"&flow=I&partners=All&frequency=M&productCode={product_code}"
         f"&levelDetail=6&levelDetailGroup=P&currency=USD&includeUnits=UNIT1"
         f"&isoCountryCode=NONE&conv=1&separator=T&includeFlow=Y"
@@ -6139,13 +6140,31 @@ def _run_vessel_lineup_tab():
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# US EXPORT DESTINATIONS  (USDA FAS GATS / Census, cached by gats.py into Snowflake GATS_EXPORTS)
+# EXPORT DESTINATIONS
+#   United States                   USDA FAS GATS / Census, cached by gats.py into Snowflake GATS_EXPORTS
+#   Brazil / Argentina / Ukraine    TDM exports by destination, cached by tdm_partners.py into TDM_PARTNER_MONTHLY
+#   China                           TDM imports by origin (same table, flow I)
 # ─────────────────────────────────────────────────────────────────────────────
 _GATS_COMMODITIES = {"Corn": "corn", "Soybeans": "soybeans", "Soybean Meal": "soybeanmeal", "Wheat": "wheat",
                     "Sorghum": "sorghum", "Canola": "canola"}
 _GATS_MBU_PER_TMT = {"corn": 0.039368, "soybeans": 0.036744, "wheat": 0.036744,
                      "sorghum": 0.039368, "canola": 0.044092}   # soybean meal has no bushel unit
 _GATS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# tab selector -> where the numbers come from and which way the trade runs
+_DEST_PLACES = {
+    "United States":              dict(code="US", src="gats", owner="US", flow="E"),
+    "Brazil":                     dict(code="BR", src="tdm", owner="Brazil", flow="E"),
+    "Argentina":                  dict(code="AR", src="tdm", owner="Argentina", flow="E"),
+    "Ukraine":                    dict(code="UA", src="tdm", owner="Ukraine", flow="E"),
+    "China (imports, by origin)": dict(code="CN", src="tdm", owner="China", flow="I"),
+}
+_TDM_COMMODITY_OF = {"205719": "corn", "205714": "soybeans", "205717": "soybeanmeal", "205713": "wheat"}
+_DEST_CONFIDENTIAL = "Confidential"        # TDM's name for shipments a country reports without a destination
+
+
+class _DestNotLoaded(Exception):
+    """The TDM partner table is missing or still empty. Raised, not returned, so st.cache_data never caches it."""
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -6172,21 +6191,73 @@ def _load_gats_destinations() -> pd.DataFrame:
             _get_sf_conn.clear()
 
 
-def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int):
-    """Where US corn / soybeans / soybean meal / wheat went, by destination and month (GATS, Census data)."""
-    df_all = _load_gats_destinations()
-    if df_all.empty:
-        st.info("No GATS destination data has been loaded yet. Run `python gats.py seed`, then `backfill`, on the droplet.")
-        return
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_tdm_partner_months() -> pd.DataFrame:
+    """Every loaded TDM partner-month: reporter, flow, commodity, code, country, year, month, tmt, value.
+    Raises _DestNotLoaded until tdm_partners.py has created and filled the table; any other failure raises as
+    it is (neither is cached)."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT reporter, flow, product_code, partner_code, partner_name, year, month, tmt, value_usd "
+                        "FROM TDM_PARTNER_MONTHLY")
+            rows = cur.fetchall()
+        except Exception as e:
+            if "does not exist" in str(e).lower():
+                raise _DestNotLoaded("TDM_PARTNER_MONTHLY does not exist yet")
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+            continue
+        if not rows:
+            raise _DestNotLoaded("TDM_PARTNER_MONTHLY is empty")
+        df = pd.DataFrame(rows, columns=["reporter", "flow", "product", "code", "country", "year", "month", "tmt", "value"])
+        df["commodity"] = df["product"].map(_TDM_COMMODITY_OF)
+        for c in ("year", "month"):
+            df[c] = df[c].astype(int)
+        for c in ("tmt", "value"):
+            df[c] = df[c].astype(float)
+        return df.dropna(subset=["commodity"]).drop(columns="product")
 
-    c1, c2 = st.columns(2)
+
+def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int):
+    """Where a country's corn / soybeans / soybean meal / wheat went (or, for China, came from), by country and
+    month: the US from GATS (Census data), Brazil / Argentina / Ukraine / China from TDM."""
+    c0, c1, c2 = st.columns(3)
+    with c0:
+        place_label = st.selectbox("Country", list(_DEST_PLACES), key="dest_place")
+    place = _DEST_PLACES[place_label]
+    owner, flow = place["owner"], place["flow"]
+    verb = "exports" if flow == "E" else "imports"
+    noun = "destination" if flow == "E" else "origin"
+    Noun = noun.capitalize()
+
+    if place["src"] == "gats":
+        df_all = _load_gats_destinations()
+        if df_all.empty:
+            st.info("No GATS destination data has been loaded yet. Run `python gats.py seed`, then `backfill`, on the droplet.")
+            return
+    else:
+        try:
+            tdm = _load_tdm_partner_months()
+        except _DestNotLoaded:
+            st.info(f"The {owner} {noun} data has not been loaded yet. It is filled by `tdm_partners.py` on the droplet "
+                    "once the TDM_PARTNER_MONTHLY table exists.")
+            return
+        df_all = tdm[(tdm["reporter"] == place["code"]) & (tdm["flow"] == flow)]
+        if df_all.empty:
+            st.info(f"No {owner} {verb} by {noun} are loaded yet.")
+            return
+
+    present = set(df_all["commodity"])
+    com_options = {k: v for k, v in _GATS_COMMODITIES.items() if v in present}
     with c1:
-        com_label = st.selectbox("Commodity", list(_GATS_COMMODITIES), key="gats_commodity")
-    com = _GATS_COMMODITIES[com_label]
+        com_label = st.selectbox("Commodity", list(com_options), key=f"dest_commodity_{place['code']}")
+    com = com_options[com_label]
     df = df_all[df_all["commodity"] == com].copy()
-    if df.empty:
-        st.info(f"No {com_label} destination data loaded yet.")
-        return
 
     factor = _GATS_MBU_PER_TMT.get(com) if use_bushels else None
     unit = unit_short if (not use_bushels or factor) else "TMT"      # meal has no bushel unit: stay in TMT
@@ -6198,7 +6269,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     first_ym = int(df["ym"].min())
     ly = last_ym // 12
     today = pd.Timestamp.now()
-    if last_ym < today.year * 12 + today.month - 1 - 3:                # newest loaded month is >3 months old
+    if place["src"] == "gats" and last_ym < today.year * 12 + today.month - 1 - 3:    # newest loaded month is >3 months old
         st.warning("The destination history is still being loaded, so the figures below are incomplete. "
                    "This notice disappears once recent months are in.")
 
@@ -6215,7 +6286,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         if y * 12 >= first_ym:
             options[f"{y} calendar year"] = (y * 12, y * 12 + 11)
     with c2:
-        per_label = st.selectbox("Period", list(options), index=2, key="gats_period")
+        per_label = st.selectbox("Period", list(options), index=2, key=f"dest_period_{place['code']}_{com}")
     start, end = options[per_label]
     p_start, p_end = start - 12, end - 12                              # same months one year earlier
     have_prior = p_start >= first_ym
@@ -6226,26 +6297,33 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     by["prior"] = by["country"].map(pri.groupby("country")["vol"].sum()).fillna(0.0)
     by = by[by["vol"] > 0].sort_values("vol", ascending=False)
     if by.empty:
-        st.info("No exports in that period.")
+        st.info(f"No {verb} in that period.")
         return
     total, prior_total = by["vol"].sum(), pri["vol"].sum()
+    named = by[by["country"] != _DEST_CONFIDENTIAL]                   # 'Confidential' is a bucket, not a country
+    conf_vol = float(by.loc[by["country"] == _DEST_CONFIDENTIAL, "vol"].sum())
 
     span = mon(start) if start == end else f"{mon(start)} – {mon(end)}"
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric(f"US {com_label.lower()} exports ({span})", f"{total:,.{dec}f} {unit}")
+    k1, k2, k3, k4 = st.columns([1.7, 1.2, 1.3, 0.8])             # the first label carries the period, so it gets the room
+    k1.metric(f"{owner} {com_label.lower()} {verb} ({span})", f"{total:,.{dec}f} {unit}")
     if have_prior and prior_total > 0:
         k2.metric("vs same months a year earlier", f"{(total / prior_total - 1) * 100:+.1f}%",
                   help=f"{prior_total:,.{dec}f} {unit} in {mon(p_start)}" + ("" if p_start == p_end else f" – {mon(p_end)}"))
-    top = by.iloc[0]
-    k3.metric("Largest destination", top["country"], f"{top['vol'] / total * 100:.0f}% of volume", delta_color="off")
-    k4.metric("Destinations", f"{len(by)}", help="Countries that took any volume in the period")
+    if len(named):
+        top = named.iloc[0]
+        k3.metric(f"Largest {noun}", top["country"], f"{top['vol'] / total * 100:.0f}% of volume", delta_color="off")
+    k4.metric(f"{Noun}s", f"{len(named)}", help="Countries that took any volume in the period" if flow == "E"
+              else "Countries that supplied any volume in the period")
+    if conf_vol > 0:
+        st.caption(f"{conf_vol / total * 100:.0f}% of the volume is reported by {owner} as '{_DEST_CONFIDENTIAL}' "
+                   f"(no {noun} given); it is shown as its own entry below and left out of the counts above.")
 
-    top_n = st.slider("Destinations shown", 5, 25, 12, key="gats_topn")
+    top_n = st.slider(f"{Noun}s shown", 5, 25, 12, key="dest_topn")
     show = by.head(top_n)
 
     col_bar, col_trend = st.columns(2)
     with col_bar:
-        st.markdown(f"#### Top {top_n} destinations — {span}")
+        st.markdown(f"#### Top {top_n} {noun}s — {span}")
         fig = go.Figure()
         if have_prior:
             fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier",
@@ -6259,7 +6337,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         st.plotly_chart(fig, use_container_width=True)
 
     with col_trend:
-        st.markdown("#### Monthly shipments by destination — last 24 months")
+        st.markdown(f"#### Monthly {verb} by {noun} — last 24 months")
         t_start = max(first_ym, last_ym - 23)
         win = df[df["ym"] >= t_start]
         lead = list(win.groupby("country")["vol"].sum().sort_values(ascending=False).head(7).index)
@@ -6279,9 +6357,9 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
                            legend=dict(orientation="h", y=-0.2))
         st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown(f"#### Destination detail — {span}")
+    st.markdown(f"#### {Noun} detail — {span}")
     tbl = pd.DataFrame({
-        "Destination": by["country"],
+        Noun: by["country"],
         f"Volume ({unit})": by["vol"],
         "Share": by["vol"] / total * 100,
         f"Year earlier ({unit})": by["prior"] if have_prior else np.nan,
@@ -6300,12 +6378,21 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
             "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
         },
     )
-    st.caption(
-        f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
-        "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
-        "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
-        "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
-    )
+    if place["src"] == "gats":
+        st.caption(
+            f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
+            "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
+            "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
+            "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
+        )
+    else:
+        st.caption(
+            f"Source: Trade Data Monitor (TDM), {owner} customs {verb} by partner country, data through {mon(last_ym)}. "
+            "Product groups: corn (ex. seed), soybeans (ex. seed), soybean meal, wheat (ex. seed). "
+            "TDM revises recent months as customs data is finalised, and each country's own reporting lag differs. "
+            + ("" if flow == "I" else f"Partners are the destination as {owner}'s customs record it; shipments to a "
+               "transshipment hub (e.g. the Netherlands, Singapore) are not traced further.")
+        )
 
 
 def main():
@@ -6393,7 +6480,7 @@ def main():
     corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
         ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
          "🇨🇳  China Imports", "🔍  Inspections", "📈  Export Sales",
-         "🧭  US Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
+         "🧭  Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
     )
 
     with corn_tab:
@@ -6437,7 +6524,7 @@ def main():
         try:
             _run_destinations_tab(use_bushels, unit_short, unit_decimals)
         except Exception as _e:
-            st.error(f"US Destinations tab error: {_e}")
+            st.error(f"Destinations tab error: {_e}")
 
     with vessel_tab:
         try:
