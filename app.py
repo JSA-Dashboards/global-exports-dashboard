@@ -1305,12 +1305,15 @@ def pct_color(val) -> str:
 _TABLE_CSS = """
 <style>
 .corn-wrap {
+    /* direction:rtl makes a scroll box open scrolled to its RIGHT end, so the most recent years sit next to the
+       pinned current-year columns; the table inside is set back to ltr below, so nothing else changes */
+    direction: rtl;
     overflow-x: auto; max-height: 580px; overflow-y: auto;
     border-radius: 6px; border: 1px solid #484f56;
     font-family: Arial, sans-serif; font-size: 12.5px;
     line-height: 1.35; margin-bottom: 8px;
 }
-.corn-tbl { border-collapse: collapse; width: max-content; min-width: 100%; }
+.corn-tbl { direction: ltr; border-collapse: collapse; width: max-content; min-width: 100%; }
 .corn-tbl th {
     background: #1e2124; color: #ffffff; font-weight: 600;
     text-align: center; padding: 7px 10px; white-space: nowrap;
@@ -1378,6 +1381,26 @@ _TABLE_CSS = """
 }
 </style>
 """
+
+_TITLE_COMMODITY = {"Soybeans": "Soybean"}      # "United States Soybean Exports", not "Soybeans Exports"
+
+
+def _view_title_html(field_label: str, commodity_label: str, is_import: bool, unit_short: str) -> str:
+    """The title above a country / category view, e.g. "United States Corn Exports (TMT)": the country that is
+    filtered, the commodity, exports (imports for China's import field) and the unit the tables are listed in."""
+    flow = "Imports" if is_import else "Exports"
+    who = field_label[:-len(" Imports")] if is_import and field_label.endswith(" Imports") else field_label
+    if who == "Major Exporters":
+        who += "'"                                    # Major Exporters' Corn Exports
+    what = _TITLE_COMMODITY.get(commodity_label, commodity_label)
+    return (
+        f'<div style="margin:18px 0 12px 0;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};'
+        f'font-family:Arial,sans-serif;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'{who} {what} {flow}</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit_short})</span></div>'
+    )
+
 
 def _show_table(pivot, html: str, key: str) -> None:
     """Render a styled HTML table with a CSV download button above it."""
@@ -3048,6 +3071,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     field       = st.session_state[field_key]
     field_label = FIELDS[field]
+    st.markdown(_view_title_html(field_label, cfg["label"], field in cfg["import_fields"], unit_short),
+                unsafe_allow_html=True)
 
     # Determine marketing year convention for the selected field
     if field == "US" and us_local_my:
@@ -3697,6 +3722,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     field       = st.session_state[field_key]
     field_label = FIELDS[field]
+    st.markdown(_view_title_html(field_label, cfg["label"], field in cfg["import_fields"], unit_short),
+                unsafe_allow_html=True)
 
     months, prev_months, last_month, my_label = _get_wheat_field_my(
         field, cfg, nh_compare, sh_compare
