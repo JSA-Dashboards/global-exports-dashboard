@@ -5901,9 +5901,9 @@ def _vl_current_table(lined_df, trends_df):
 def _vl_change_table(trends_df, col):
     if trends_df is None or trends_df.empty:
         return pd.DataFrame()
-    t = trends_df[["COMMODITY", col]].copy().rename(columns={col: "MT Δ (kMT)"})
+    t = trends_df[["COMMODITY", col]].copy().rename(columns={col: "MT Δ (TMT)"})
     total = pd.DataFrame([{"COMMODITY": "Total",
-                            "MT Δ (kMT)": t["MT Δ (kMT)"].sum()}])
+                            "MT Δ (TMT)": t["MT Δ (TMT)"].sum()}])
     return pd.concat([t, total], ignore_index=True).set_index("COMMODITY")
 
 
@@ -5944,7 +5944,7 @@ def _vl_render_snapshot(frames, trends_regions, latest_date):
                 chg = _vl_change_table(trends, col_key)
                 if not chg.empty:
                     fmt = chg.copy()
-                    fmt["MT Δ (kMT)"] = fmt["MT Δ (kMT)"].apply(
+                    fmt["MT Δ (TMT)"] = fmt["MT Δ (TMT)"].apply(
                         lambda v: _vl_fmt_change(v) if isinstance(v, (int, float)) else v
                     )
                     st.dataframe(fmt, use_container_width=True)
@@ -5969,9 +5969,9 @@ def _vl_page_summary(frames, n_months, trends_regions=None, latest_date=None):
             "all regions combined", _VL_COL_BLUE)
     _vl_kpi(c2, "Total Vessels Sailed", f"{smry['Sailed'].sum():,}",
             f"last {n_months} months", _VL_COL_POS)
-    _vl_kpi(c3, "Volume Lined Up", f"{smry['LU_MT'].sum():,.0f} kMT",
+    _vl_kpi(c3, "Volume Lined Up", f"{smry['LU_MT'].sum():,.0f} TMT",
             "known MT (excl. RVT)", _VL_COL_AMB)
-    _vl_kpi(c4, "Volume Sailed", f"{smry['S_MT'].sum():,.0f} kMT",
+    _vl_kpi(c4, "Volume Sailed", f"{smry['S_MT'].sum():,.0f} TMT",
             f"last {n_months} months", _VL_COL_PURP)
     st.markdown("---")
 
@@ -6003,8 +6003,8 @@ def _vl_page_summary(frames, n_months, trends_regions=None, latest_date=None):
 
     st.dataframe(
         smry.rename(columns=dict(
-            Lined_Up="Lined Up", LU_MT="Lined Up kMT",
-            Sailed=f"Sailed ({n_months}mo)", S_MT="Sailed kMT",
+            Lined_Up="Lined Up", LU_MT="Lined Up TMT",
+            Sailed=f"Sailed ({n_months}mo)", S_MT="Sailed TMT",
         )).set_index("Region"),
         use_container_width=True,
     )
@@ -6046,10 +6046,10 @@ def _vl_page_region(df, region_label, n_months):
     top_s_n = sailed["COMM_GRP"].value_counts().iloc[0] if len(sailed) > 0 else 0
 
     _vl_kpi(c1, "Vessels Lined Up", f"{len(lined):,}",
-            f"{lu_mt:,.0f} kMT known" if lu_mt > 0 else "MT not disclosed", _VL_COL_BLUE)
+            f"{lu_mt:,.0f} TMT known" if lu_mt > 0 else "MT not disclosed", _VL_COL_BLUE)
     _vl_kpi(c2, "Top Commodity (Lined Up)", top_lu, f"{top_lu_n} vessels", _VL_COL_AMB)
     _vl_kpi(c3, f"Vessels Sailed — last {n_months}mo", f"{len(sailed):,}",
-            f"{s_mt:,.0f} kMT", _VL_COL_POS)
+            f"{s_mt:,.0f} TMT", _VL_COL_POS)
     _vl_kpi(c4, "Top Commodity (Sailed)", top_s, f"{top_s_n} vessels", _VL_COL_PURP)
     st.markdown("---")
 
@@ -6085,8 +6085,8 @@ def _vl_page_region(df, region_label, n_months):
 
     mv = sailed.groupby("SAIL_MONTH")["MT_kMT"].sum().reset_index()
     fig_v = px.bar(mv.sort_values("SAIL_MONTH"), x="SAIL_MONTH", y="MT_kMT",
-                   title="Shipped Volume by Month (kMT — excludes RVT)",
-                   labels={"SAIL_MONTH": "Month", "MT_kMT": "kMT"},
+                   title="Shipped Volume by Month (TMT — excludes RVT)",
+                   labels={"SAIL_MONTH": "Month", "MT_kMT": "TMT"},
                    color_discrete_sequence=[_VL_GREEN_LT])
     fig_v.update_layout(**_VL_BASE_LAYOUT)
     fig_v.update_xaxes(tickformat="%b %Y")
