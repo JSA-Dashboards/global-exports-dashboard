@@ -137,6 +137,7 @@ def _find(filename: str) -> str:
 
 LOGO_FULL_PATH  = _find("jsa_logo_full.png")
 LOGO_WHITE_PATH = _find("jsa_logo_white.png")
+LOGO_50YR_PATH  = _find("jsa_logo_50yr.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTLY CHART CONFIG  (PNG download button + clean toolbar on every chart)
@@ -4721,459 +4722,902 @@ def _render_my_reference_tab():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXPORT INSPECTIONS TAB  (USDA FGIS Socrata – enhanced)
+# US EXPORT INSPECTIONS TAB  (USDA FGIS "Grain Inspections", weekly)
+#   Source: USDA AMS AgTransport Socrata dataset sruw-w49i = Federal Grain Inspection Service export inspections,
+#   one row per certificate: week ending (Thursday), certificate month/year, carrier, class, destination, port,
+#   region, tonnes, pounds. Layout follows jpsi.com/export-inspections-dashboard (filters, destination map, pie,
+#   origin, destination, weekly series, multi-year overlay) plus this dashboard's pace comparisons and unit toggle.
+#   Marketing years split a week that straddles the 1st by certificate date (as jpsi.com does), so MYTD = USDA's.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_FGIS_PORT_GROUP = {
-    "MISSISSIPPI R.": "Gulf", "S. TEXAS": "Gulf", "N. TEXAS": "Gulf",
-    "COLUMBIA R.": "Pacific", "PUGET SOUND": "Pacific",
-    "S. ATLANTIC": "Atlantic",
-    "INTERIOR": "Interior", "TOLEDO": "Interior",
+# label -> (dataset grain, marketing-year start month, pounds per bushel or None when USDA defines none)
+_INSP_GRAINS = {
+    "Corn":      ("CORN",      9, 56),
+    "Soybeans":  ("SOYBEANS",  9, 60),
+    "Wheat":     ("WHEAT",     6, 60),
+    "Sorghum":   ("SORGHUM",   9, 56),
+    "Barley":    ("BARLEY",    6, 48),
+    "Oats":      ("OATS",      6, 32),
+    "Canola":    ("CANOLA",    8, 50),
+    "Sunflower": ("SUNFLOWER", 9, None),
+    "Flaxseed":  ("FLAXSEED",  6, 56),
 }
-_PORT_GROUP_COLORS = {
-    "Gulf": "#0693e3", "Pacific": "#4a6741",
-    "Atlantic": "#f9a825", "Interior": "#78909c", "Other": "#ab47bc",
+_INSP_LBS_PER_MT = 2204.62262
+_INSP_REGION = {"GULF": "Gulf", "PACIFIC": "Pacific", "INTERIOR": "Interior", "ATLANTIC": "Atlantic",
+                "LAKES": "Great Lakes", "ST LAWR SWY": "St. Lawrence Seaway"}
+_INSP_CLASS = {
+    "YC": "Yellow", "WHC": "White", "XC": "Mixed", "YSB": "Yellow", "XSB": "Mixed",
+    "HRW": "Hard red winter", "HRS": "Hard red spring", "SRW": "Soft red winter", "SWW": "Soft white",
+    "DUWH": "Durum", "WW": "White (all)", "HDWH": "Hard white", "XWHT": "Mixed", "UNCL": "Unclassed",
+    "S": "Sorghum", "YS": "Yellow", "WHS": "White", "XS": "Mixed", "TANS": "Tan",
+    "BAR": "Barley", "MBLY": "Malting barley", "K": "Canola", "O": "Oats", "OATS": "Oats",
 }
-_CARRIER_COLORS = {
-    "VESSEL": "#0693e3", "SHIP": "#0693e3",
-    "CONTAINER": "#4caf50", "RAIL": "#f9a825",
-    "TRUCK": "#ef5350", "BARGE": "#ab47bc",
+
+# FGIS destination label -> (display name, ISO-3 for the map; blank = historical or a region, not drawn)
+_FGIS_DEST_TABLE = """
+JAPAN|Japan|JPN
+CHINA|China|CHN
+MEXICO|Mexico|MEX
+KOREA REP|South Korea|KOR
+TAIWAN|Taiwan|TWN
+EGYPT|Egypt|EGY
+USSR|USSR (historical)|
+COLOMBIA|Colombia|COL
+NETHERLANDS|Netherlands|NLD
+SPAIN|Spain|ESP
+PHILIPPINES|Philippines|PHL
+INDONESIA|Indonesia|IDN
+CANADA|Canada|CAN
+NIGERIA|Nigeria|NGA
+VENEZUELA|Venezuela|VEN
+ALGERIA|Algeria|DZA
+ISRAEL|Israel|ISR
+SAUDI ARABIA|Saudi Arabia|SAU
+ITALY|Italy|ITA
+PERU|Peru|PER
+MOROCCO|Morocco|MAR
+DOMINICN REP|Dominican Republic|DOM
+THAILAND|Thailand|THA
+GERMANY|Germany|DEU
+COSTA RICA|Costa Rica|CRI
+GUATEMALA|Guatemala|GTM
+PORTUGAL|Portugal|PRT
+BRAZIL|Brazil|BRA
+PAKISTAN|Pakistan|PAK
+BELGIUM|Belgium|BEL
+EL SALVADOR|El Salvador|SLV
+TURKEY|Turkey|TUR
+BANGLADESH|Bangladesh|BGD
+VIETNAM|Vietnam|VNM
+HONDURAS|Honduras|HND
+IRAQ|Iraq|IRQ
+MALAYSIA|Malaysia|MYS
+TUNISIA|Tunisia|TUN
+YEMEN|Yemen|YEM
+REP S AFRICA|South Africa|ZAF
+PANAMA|Panama|PAN
+CHILE|Chile|CHL
+JAMAICA|Jamaica|JAM
+RUSSIA|Russia|RUS
+UN KINGDOM|United Kingdom|GBR
+ECUADOR|Ecuador|ECU
+JORDAN|Jordan|JOR
+SYRIA|Syria|SYR
+ETHIOPIA|Ethiopia|ETH
+SRI LANKA|Sri Lanka|LKA
+TRINIDAD|Trinidad and Tobago|TTO
+CUBA|Cuba|CUB
+FRANCE|France|FRA
+NICARAGUA|Nicaragua|NIC
+SUDAN|Sudan|SDN
+GERM FR (W)|West Germany (historical)|DEU
+INDIA|India|IND
+IRAN|Iran|IRN
+LEBANON|Lebanon|LBN
+POLAND|Poland|POL
+KENYA|Kenya|KEN
+MOZAMBIQUE|Mozambique|MOZ
+ROMANIA|Romania|ROU
+HAITI|Haiti|HTI
+GERM DR (E)|East Germany (historical)|DEU
+GREECE|Greece|GRC
+YUGOSLAVIA|Yugoslavia (historical)|
+BULGARIA|Bulgaria|BGR
+NORWAY|Norway|NOR
+GHANA|Ghana|GHA
+UZBEKISTAN|Uzbekistan|UZB
+UN ARAB EM|United Arab Emirates|ARE
+CYPRUS|Cyprus|CYP
+BARBADOS|Barbados|BRB
+IRELAND|Ireland|IRL
+SINGAPORE|Singapore|SGP
+ARGENTINA|Argentina|ARG
+BOLIVIA|Bolivia|BOL
+HONG KONG|Hong Kong|HKG
+UKRAINE|Ukraine|UKR
+DENMARK|Denmark|DNK
+ZAIRE|DR Congo|COD
+NORTH KOREA|North Korea|PRK
+ERITREA|Eritrea|ERI
+GEORGIA|Georgia|GEO
+SOMALIA|Somalia|SOM
+GUYANA|Guyana|GUY
+AFGHANISTAN|Afghanistan|AFG
+ZIMBABWE|Zimbabwe|ZWE
+LIBYA|Libya|LBY
+ANGOLA|Angola|AGO
+KUWAIT|Kuwait|KWT
+AUSTRALIA|Australia|AUS
+TANZANIA|Tanzania|TZA
+NIGER|Niger|NER
+FINLAND|Finland|FIN
+ST. VINCENT|St. Vincent and the Grenadines|VCT
+ARMENIA|Armenia|ARM
+CANARY IS|Canary Islands|
+MALTA|Malta|MLT
+NEW ZEALAND|New Zealand|NZL
+DJIBOUTI|Djibouti|DJI
+SURINAME|Suriname|SUR
+CAMEROON|Cameroon|CMR
+ZAMBIA|Zambia|ZMB
+MALAWI|Malawi|MWI
+BURMA|Myanmar|MMR
+SENEGAL|Senegal|SEN
+OMAN|Oman|OMN
+YEMEN (SANA)|Yemen|YEM
+TOGO|Togo|TGO
+BELIZE|Belize|BLZ
+NEPAL|Nepal|NPL
+KYRGYZSTAN|Kyrgyzstan|KGZ
+UGANDA|Uganda|UGA
+NAMIBIA|Namibia|NAM
+MAURITANIA|Mauritania|MRT
+GRENADA|Grenada|GRD
+MOLDOVA|Moldova|MDA
+BOSNIA-HERC|Bosnia and Herzegovina|BIH
+CONGO (KINS)|DR Congo|COD
+CHAD|Chad|TCD
+BENIN|Benin|BEN
+SLOVENIA|Slovenia|SVN
+CONGO (BRAZ)|Republic of the Congo|COG
+CAPE VERDE|Cape Verde|CPV
+LITHUANIA|Lithuania|LTU
+SIERRA LEONE|Sierra Leone|SLE
+LIBERIA|Liberia|LBR
+ESTONIA|Estonia|EST
+TURKMENISTAN|Turkmenistan|TKM
+RWANDA|Rwanda|RWA
+MONGOLIA|Mongolia|MNG
+COTE DIVOIRE|Cote d'Ivoire|CIV
+TAJIKISTAN|Tajikistan|TJK
+BELARUS|Belarus|BLR
+NETH ANTIL|Netherlands Antilles|
+ALBANIA|Albania|ALB
+HUNGARY|Hungary|HUN
+ST. LUCIA|St. Lucia|LCA
+MADAGASCAR|Madagascar|MDG
+URUGUAY|Uruguay|URY
+CROATIA|Croatia|HRV
+ICELAND|Iceland|ISL
+SWITZERLAND|Switzerland|CHE
+BURUNDI|Burundi|BDI
+GUINEA|Guinea|GIN
+BOTSWANA|Botswana|BWA
+MALI|Mali|MLI
+LATVIA|Latvia|LVA
+LEE WIND IS|Leeward and Windward Islands|
+BAHRAIN|Bahrain|BHR
+YEMEN (ADEN)|Yemen|YEM
+OTH WST AFR|Other West Africa|
+MACEDONIA|North Macedonia|MKD
+SOUTH SUDAN|South Sudan|SSD
+CAMBODIA|Cambodia|KHM
+GUADELOUPE|Guadeloupe|GLP
+BURKINA|Burkina Faso|BFA
+UNKNOWN|Unknown|
+GABON|Gabon|GAB
+ESWATINI|Eswatini|SWZ
+AZERBAIJAN|Azerbaijan|AZE
+LESOTHO|Lesotho|LSO
+WEST BANK|West Bank|PSE
+MAURITIUS|Mauritius|MUS
+NEW GUINEA|Papua New Guinea|PNG
+MARTINIQUE|Martinique|MTQ
+S WST AFRICA|South West Africa (historical)|NAM
+COMOROS|Comoros|COM
+CZECH REP|Czech Republic|CZE
+SWEDEN|Sweden|SWE
+GAMBIA|Gambia|GMB
+FR WST IND|French West Indies|
+QATAR|Qatar|QAT
+FRENCH POLY|French Polynesia|PYF
+UPPER VOLTA|Burkina Faso|BFA
+SO PAC IS|South Pacific Islands|
+BAHAMAS|Bahamas|BHS
+MAYOTTE|Mayotte|MYT
+FR PAC IS|French Pacific Islands|
+OTHER PAC IS|Other Pacific Islands|
+CEN AFR REP|Central African Republic|CAF
+OTH SO ASIA|Other South Asia|
+VANUATU|Vanuatu|VUT
+BRUNEI|Brunei|BRN
+FR GUIANA|French Guiana|GUF
+AUSTRIA|Austria|AUT
+BHUTAN|Bhutan|BTN
+MACAO|Macao|MAC
+LAOS|Laos|LAO
+VATICAN CITY|Vatican City|VAT
+MALDIVES|Maldives|MDV
+COCOS IS|Cocos Islands|CCK
+SAO TOME&PR|Sao Tome and Principe|STP
+ST.KITTS&NEV|St. Kitts and Nevis|KNA
+FIJI|Fiji|FJI
+VIRGIN ISLAN|Virgin Islands|VIR
+REUNION|Reunion|REU
+TOKELAU|Tokelau|TKL
+"""
+_FGIS_DEST = {
+    r[0]: (r[1], r[2] or None)
+    for r in (line.split("|") for line in _FGIS_DEST_TABLE.strip().splitlines())
 }
-_INSP_GRAINS = {"Corn": "CORN", "Soybeans": "SOYBEANS", "Wheat": "WHEAT"}
+
+
+def _insp_first_thu(my: int, start_month: int) -> pd.Timestamp:
+    """Week ending (Thursday) of week 1 of a marketing year: the first Thursday on or after its first day."""
+    d = pd.Timestamp(year=int(my), month=int(start_month), day=1)
+    return d + pd.Timedelta(days=(3 - d.weekday()) % 7)
+
+
+def _fgis_fetch_raw(grain_code: str) -> pd.DataFrame:
+    """One grain's weekly FGIS inspections, grouped by week ending, certificate month, destination, region, port,
+    carrier and class, straight from the AgTransport Socrata API (CSV, 50,000 rows a page). Raises on any failure."""
+    import io
+    import time
+    import requests
+    url = f"https://{_SOCRATA_HOST}{_SOCRATA_PATH.replace('.json', '.csv')}"
+    group = "date, year, month, destination, ams_reg, port, type_carrier_text, class"
+    select = "date as week_end, year, month, destination, ams_reg, port, type_carrier_text, class, sum(mt) as mt, sum(pounds) as lbs"
+    page, parts, offset = 50_000, [], 0
+    while True:
+        params = {"$select": select, "$where": f"grain='{grain_code}'", "$group": group, "$order": group,
+                  "$limit": str(page), "$offset": str(offset)}
+        for attempt in (1, 2, 3):
+            try:
+                r = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=(10, 120))
+                if r.status_code in (429, 500, 502, 503, 504):
+                    raise requests.HTTPError(f"HTTP {r.status_code}")
+                r.raise_for_status()
+                break
+            except requests.RequestException:
+                if attempt == 3:
+                    raise
+                time.sleep(2 * attempt)
+        part = pd.read_csv(io.StringIO(r.text))
+        parts.append(part)
+        if len(part) < page:
+            break
+        offset += page
+    return pd.concat(parts, ignore_index=True)
+
+
+def _fgis_prepare(raw: pd.DataFrame, start_month: int) -> pd.DataFrame:
+    """Raw grouped rows -> week_end, my (marketing-year start year), my_week, dest, iso3, region, port, carrier,
+    cls, mt, lbs. A marketing year runs from its start month by certificate date; its week n ends on the first
+    Thursday on or after the 1st plus 7 x (n-1) days, so a straddling week is split between two years."""
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    df = raw.copy()
+    df["week_end"] = pd.to_datetime(df["week_end"], errors="coerce").dt.normalize()
+    for c in ("year", "month"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["mt"] = pd.to_numeric(df["mt"], errors="coerce").fillna(0.0)
+    lbs = pd.to_numeric(df["lbs"], errors="coerce")
+    df["lbs"] = lbs.where(lbs > 0, df["mt"] * _INSP_LBS_PER_MT)        # a handful of old rows carry no pounds
+    df = df.dropna(subset=["week_end", "year", "month"])
+    year, month = df["year"].astype(int), df["month"].astype(int)
+    df["my"] = np.where(month >= start_month, year, year - 1)
+    first = pd.to_datetime({"year": df["my"], "month": start_month, "day": 1})
+    first_thu = first + pd.to_timedelta((3 - first.dt.weekday) % 7, unit="D")
+    df["my_week"] = ((df["week_end"] - first_thu).dt.days // 7) + 1
+    df = df[df["my_week"] >= 1].copy()
+    dest = df["destination"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
+    df["dest"] = dest.map(lambda k: _FGIS_DEST.get(k, (k.title(), None))[0])
+    df["iso3"] = dest.map(lambda k: _FGIS_DEST.get(k, (None, None))[1])
+    reg = df["ams_reg"].fillna("").astype(str).str.upper().str.strip()
+    df["region"] = reg.map(lambda k: _INSP_REGION.get(k, k.title() or "Other"))
+    df["port"] = df["port"].fillna("").astype(str).str.strip().str.title().replace("", "Unknown")
+    df["carrier"] = df["type_carrier_text"].fillna("OTHER").astype(str).str.strip().str.title()
+    cls = df["class"].fillna("").astype(str).str.upper().str.strip()
+    df["cls"] = cls.map(lambda k: _INSP_CLASS.get(k, k.title() if k else "Unclassed"))
+    return df[["week_end", "my", "my_week", "dest", "iso3", "region", "port", "carrier", "cls", "mt", "lbs"]].reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_fgis_detail(grain_code: str) -> pd.DataFrame:
-    """FGIS Socrata detailed inspections → DataFrame(year,month,week,dest,port,carrier,mt)."""
-    import http.client
-    out = []
-    limit = 50_000
-    for offset in range(0, 200_000, limit):
-        params = urllib.parse.urlencode({
-            "$select": "year,month,week,destination,port,type_carrier_text,sum(mt) as total_mt",
-            "$where":  f"grain='{grain_code}'",
-            "$group":  "year,month,week,destination,port,type_carrier_text",
-            "$limit":  str(limit),
-            "$offset": str(offset),
-        })
-        try:
-            ctx  = ssl.create_default_context()
-            conn = http.client.HTTPSConnection(_SOCRATA_HOST, 443, context=ctx, timeout=30)
-            conn.request("GET", f"{_SOCRATA_PATH}?{params}",
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
-                         "Connection": "close"})
-            resp = conn.getresponse()
-            body = resp.read(10_000_000)
-            conn.close()
-            if resp.status != 200:
-                break
-            rows = json.loads(body.decode("utf-8"))
-            if not rows:
-                break
-            for r in rows:
-                try:
-                    out.append({
-                        "year":    int(r["year"]),
-                        "month":   int(r["month"]),
-                        "week":    int(r["week"]),
-                        "dest":    r.get("destination", "OTHER").strip().title(),
-                        "port":    r.get("port", "").strip(),
-                        "carrier": r.get("type_carrier_text", "").strip().upper(),
-                        "mt":      float(r["total_mt"]),
-                    })
-                except Exception:
-                    pass
-            if len(rows) < limit:
-                break
-        except Exception:
-            break
-    if not out:
-        return pd.DataFrame()
-    df = pd.DataFrame(out)
-    df["port_group"] = df["port"].map(_FGIS_PORT_GROUP).fillna("Other")
-    return df
+def _load_inspections(grain_code: str, start_month: int) -> pd.DataFrame:
+    """Prepared weekly inspections for one grain. Raises on a failed fetch, so st.cache_data never keeps an empty
+    frame for an hour after a bad Socrata moment."""
+    return _fgis_prepare(_fgis_fetch_raw(grain_code), start_month)
 
 
-def _fgis_add_my(df: pd.DataFrame, grain_label: str) -> pd.DataFrame:
-    """Add 'my' (marketing year start) and 'my_week' (1-52/53) columns."""
-    df = df.copy()
-    is_wheat = grain_label.lower() == "wheat"
-    if is_wheat:
-        df["my"] = df.apply(lambda r: r["year"] if r["month"] >= 7 else r["year"] - 1, axis=1)
-        my_months_map = {7:1,8:2,9:3,10:4,11:5,12:6,1:7,2:8,3:9,4:10,5:11,6:12}
+# ── presentation: the light, sage palette of the CFTC COT dashboard ───────────
+_INSP_SURF, _INSP_BORDER, _INSP_TEXT, _INSP_MUTED, _INSP_SAGE = "#ffffff", "#d7e2dc", "#32373c", "#5f7267", "#5e7164"
+_INSP_BLUE, _INSP_TERRA, _INSP_LAV, _INSP_GOLD, _INSP_MIST = "#6fa8c4", "#c4785a", "#9b89c4", "#c4b456", "#b8c4bc"
+_INSP_POS, _INSP_NEG = "#16a34a", "#dc2626"
+_INSP_PAL = [_INSP_BLUE, _INSP_TERRA, _INSP_SAGE, _INSP_LAV, _INSP_GOLD, "#8fa398", "#d08fa0", "#7aa3a0"]
+_INSP_REGION_COLOR = {"Gulf": _INSP_BLUE, "Pacific": _INSP_SAGE, "Interior": _INSP_TERRA, "Atlantic": _INSP_LAV,
+                      "Great Lakes": _INSP_GOLD, "St. Lawrence Seaway": "#8fa398"}
+_INSP_CARRIER_COLOR = {"Ship": _INSP_BLUE, "Rail": _INSP_TERRA, "Container": _INSP_LAV, "Barge": _INSP_SAGE,
+                       "Truck": _INSP_GOLD, "Other": _INSP_MIST}
+_INSP_SEG_COL = {"Origin": "region", "Destination": "dest", "Carrier": "carrier"}
+_INSP_AXIS = dict(gridcolor=_INSP_BORDER, linecolor=_INSP_BORDER, showgrid=True, zeroline=False,
+                  tickfont=dict(color=_INSP_MUTED, size=11), title_font=dict(color=_INSP_MUTED, size=11))
+_INSP_CSS = """
+<style>
+.insp-sec { color:#5f7267; font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; padding:10px 0 4px;
+            border-bottom:1px solid #d7e2dc; margin:24px 0 12px; }
+.insp-tile { background:#fff; border:1px solid #d7e2dc; border-top:3px solid #5e7164; border-radius:10px;
+             padding:14px 16px 12px; min-height:164px; }
+.insp-tile-label { color:#5f7267; font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; margin-bottom:6px; }
+.insp-tile-value { color:#32373c; font-size:1.65rem; font-weight:700; line-height:1.1; }
+.insp-tile-unit { color:#5f7267; font-size:.8rem; font-weight:600; margin-left:5px; }
+.insp-line { color:#5f7267; font-size:.78rem; margin-top:5px; }
+.insp-note { color:#5f7267; font-size:.78rem; line-height:1.5; margin-top:8px; }
+</style>
+"""
+
+
+def _insp_pct(a, b):
+    if a is None or b is None or pd.isna(a) or pd.isna(b) or b == 0:
+        return None
+    return (a / b - 1.0) * 100.0
+
+
+def _insp_fmt(v, unit: str) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{v:,.{_insp_dec(unit, v)}f}"
+
+
+def _insp_dec(unit: str, ref) -> int:
+    """Decimals that suit the size of the numbers: volumes run from thousands of TMT down to a few kilograms of oats."""
+    ref = 0.0 if ref is None or pd.isna(ref) else abs(float(ref))
+    steps = ((100, 0), (1, 1), (0.1, 2), (0.01, 3)) if unit == "TMT" else ((10, 1), (1, 2), (0.1, 3), (0.01, 4))
+    return next((d for floor, d in steps if ref >= floor), steps[-1][1] + 1 if ref > 0 else steps[1][1])
+
+
+def _insp_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
+
+
+def _insp_mix(c1: str, c2: str, t: float) -> str:
+    """The colour a fraction t of the way from c1 to c2 (both '#rrggbb')."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(a[j] + (b[j] - a[j]) * t):02x}" for j in range(3))
+
+
+def _insp_plot(fig: go.Figure, key: str) -> None:
+    """st.plotly_chart across Streamlit versions: width="stretch" where it exists, else use_container_width."""
+    try:
+        st.plotly_chart(fig, width="stretch", theme=None, key=key)
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True, theme=None, key=key)
+
+
+def _insp_table(data, height: int) -> None:
+    try:
+        st.dataframe(data, width="stretch", height=height)
+    except TypeError:
+        st.dataframe(data, use_container_width=True, height=height)
+
+
+def _insp_sec(text: str) -> None:
+    st.markdown(f'<div class="insp-sec">{text}</div>', unsafe_allow_html=True)
+
+
+def _insp_delta_line(p, text: str) -> str:
+    if p is None:
+        return f'<div class="insp-line">— {text}</div>'
+    col, arrow = (_INSP_POS, "▲") if p >= 0 else (_INSP_NEG, "▼")
+    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(p):.1f}%</b> {text}</div>'
+
+
+def _insp_tile(label: str, value: str, unit: str, lines: list) -> str:
+    return (f'<div class="insp-tile"><div class="insp-tile-label">{label}</div>'
+            f'<div class="insp-tile-value">{value}<span class="insp-tile-unit">{unit}</span></div>'
+            f'{"".join(lines)}</div>')
+
+
+def _insp_style(fig: go.Figure, height: int, title: str | None = None, subtitle: str | None = None,
+                legend: bool = True, hover: str = "x unified", logo: str | None = None,
+                x_title: str | None = None, y_title: str | None = None) -> go.Figure:
+    head = None
+    if title:
+        text = f"<b>{title}</b>" + (f"<br><span style='font-size:12px;color:{_INSP_MUTED}'>{subtitle}</span>" if subtitle else "")
+        head = dict(text=text, x=0, xanchor="left", y=0.94, yanchor="top", font=dict(size=14, color=_INSP_TEXT))
+    fig.update_layout(
+        template="plotly_white", height=height,
+        margin=dict(l=10, r=10, t=(84 if subtitle else 62) if title else 24, b=10),
+        paper_bgcolor=_INSP_SURF, plot_bgcolor=_INSP_SURF, font=dict(color=_INSP_TEXT, size=11),
+        hovermode=hover,
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor=_INSP_BORDER, font=dict(color=_INSP_TEXT, size=12)),
+        showlegend=legend,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                    font=dict(size=11, color=_INSP_MUTED), bgcolor="rgba(0,0,0,0)"),
+        title=head,
+        xaxis=dict(**_INSP_AXIS, title=x_title), yaxis=dict(**_INSP_AXIS, title=y_title),
+    )
+    if logo:
+        fig.add_layout_image(dict(source=logo, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.42, sizey=0.42,
+                                  xanchor="center", yanchor="middle", sizing="contain", opacity=0.09, layer="below"))
+    return fig
+
+
+def _insp_seg_labels(frame: pd.DataFrame, seg: str, top: int = 7) -> pd.Series:
+    """The stacking label of each row: region / carrier as they are, destinations folded to a top few plus 'Other'."""
+    s = frame[_INSP_SEG_COL[seg]]
+    if seg == "Destination":
+        keep = frame.groupby("dest")["v"].sum().nlargest(top).index
+        s = s.where(s.isin(keep), "Other")
+    return s
+
+
+def _insp_seg_color(name: str, seg: str, i: int) -> str:
+    if name == "Other":
+        return _INSP_MIST
+    if seg == "Origin":
+        return _INSP_REGION_COLOR.get(name, _INSP_PAL[i % len(_INSP_PAL)])
+    if seg == "Carrier":
+        return _INSP_CARRIER_COLOR.get(name, _INSP_PAL[i % len(_INSP_PAL)])
+    return _INSP_PAL[i % len(_INSP_PAL)]
+
+
+def _insp_matrices(df_all: pd.DataFrame, df_f: pd.DataFrame):
+    """Weekly (M) and cumulative (C) volume, one row per marketing year, columns = marketing-year week. Weeks a year
+    never reached are NaN; weeks it reached with nothing inspected (after filtering) are 0."""
+    last_w = df_all.groupby("my")["my_week"].max().sort_index()
+    cols = list(range(1, int(last_w.max()) + 1))
+    wk = df_f.groupby(["my", "my_week"])["v"].sum().unstack("my_week")
+    M = wk.reindex(index=last_w.index, columns=cols)
+    in_range = pd.DataFrame(np.arange(1, len(cols) + 1)[None, :] <= last_w.to_numpy()[:, None],
+                            index=last_w.index, columns=cols)
+    M = M.where(~in_range | M.notna(), 0.0).where(in_range)
+    C = M.fillna(0.0).cumsum(axis=1).where(in_range)
+    return M, C
+
+
+def _insp_olympic(mat: pd.DataFrame, years: list, week: int):
+    return olympic_avg([float(mat.at[y, week]) for y in years if week in mat.columns and pd.notna(mat.at[y, week])])
+
+
+def _insp_month_ticks(first_thu: pd.Timestamp, n_weeks: int):
+    """Marketing-year week numbers that open a calendar month, labelled with the month, for the week-number axis."""
+    vals, text, prev = [], [], None
+    for n in range(1, n_weeks + 1):
+        d = first_thu + pd.Timedelta(weeks=n - 1)
+        if d.month != prev:
+            vals.append(n)
+            text.append(f"{d:%b}")
+            prev = d.month
+    return vals, text
+
+
+def _insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, unit, grain, my_label, logo):
+    """Weekly bars (or cumulative lines) for the selected marketing year, against last year and the 6-year Olympic
+    average; stacked by the chosen segment."""
+    weeks = list(range(1, last_w + 1))
+    dates = [first_thu + pd.Timedelta(weeks=n - 1) for n in weeks]
+    mat = M if view == "Weekly" else C
+    prior6 = [y for y in mat.index if y < sel_my][-6:]
+    cur_row = mat.loc[sel_my].reindex(weeks)
+    ly_row = mat.loc[sel_my - 1].reindex(weeks) if (sel_my - 1) in mat.index else pd.Series(np.nan, index=weeks)
+    oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+    dec = _insp_dec(unit, cur_row.max())
+    hov = lambda name: f"Wk %{{customdata}}: %{{y:,.{dec}f}} {unit}<extra>{name}</extra>"
+    cur = dff[dff["my"] == sel_my]
+    fig = go.Figure()
+
+    if view == "Weekly":
+        if seg == "None":
+            fig.add_trace(go.Bar(x=dates, y=cur_row.fillna(0.0), name=my_label, customdata=weeks, hovertemplate=hov(my_label),
+                                 marker_color=["#3b7fa3" if n == sel_week else _INSP_BLUE for n in weeks]))
+        else:
+            labels = _insp_seg_labels(cur, seg)
+            pv = (cur.assign(seg=labels).groupby(["seg", "my_week"])["v"].sum().unstack("my_week")
+                  .reindex(columns=weeks).fillna(0.0))
+            for i, name in enumerate(pv.sum(axis=1).sort_values(ascending=False).index):
+                fig.add_trace(go.Bar(x=dates, y=pv.loc[name], name=name, customdata=weeks, hovertemplate=hov(name),
+                                     marker_color=_insp_seg_color(name, seg, i)))
+            fig.update_layout(barmode="stack")
+        fig.add_trace(go.Scatter(x=dates, y=ly_row, mode="lines", name="Last year", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Last year")))
+        fig.add_trace(go.Scatter(x=dates, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+        sub = "Weekly, week ending Thursday. Last year and the 6-year Olympic average are the same marketing-year week."
     else:
-        df["my"] = df.apply(lambda r: r["year"] if r["month"] >= 10 else r["year"] - 1, axis=1)
-        my_months_map = {10:1,11:2,12:3,1:4,2:5,3:6,4:7,5:8,6:9,7:10,8:11,9:12}
-    df["my_month_pos"] = df["month"].map(my_months_map)
-    df["my_label"] = df["my"].apply(lambda y: f"{y}/{str(y+1)[-2:]}")
-    return df
+        rng = [i for i, n in enumerate(weeks)
+               if sum(1 for y in prior6 if n in C.columns and pd.notna(C.at[y, n])) >= 2]
+        if rng:
+            hi = [max(C.at[y, weeks[i]] for y in prior6 if pd.notna(C.at[y, weeks[i]])) for i in rng]
+            lo = [min(C.at[y, weeks[i]] for y in prior6 if pd.notna(C.at[y, weeks[i]])) for i in rng]
+            xs = [dates[i] for i in rng]
+            fig.add_trace(go.Scatter(x=xs + xs[::-1], y=hi + lo[::-1], fill="toself", mode="lines", line=dict(width=0),
+                                     fillcolor=_insp_rgba(_INSP_SAGE, 0.13), name="6-yr range", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=dates, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+        fig.add_trace(go.Scatter(x=dates, y=ly_row, mode="lines", name="Last year", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Last year")))
+        if seg == "None":
+            fig.add_trace(go.Scatter(x=dates, y=cur_row, mode="lines", name=my_label, customdata=weeks,
+                                     line=dict(color=_INSP_BLUE, width=3.4), hovertemplate=hov(my_label)))
+        else:
+            labels = _insp_seg_labels(cur, seg)
+            pv = (cur.assign(seg=labels).groupby(["seg", "my_week"])["v"].sum().unstack("my_week")
+                  .reindex(columns=weeks).fillna(0.0).cumsum(axis=1))
+            for i, name in enumerate(pv.iloc[:, -1].sort_values(ascending=False).index):
+                col = _insp_seg_color(name, seg, i)
+                fig.add_trace(go.Scatter(x=dates, y=pv.loc[name], mode="lines", name=name, stackgroup="seg",
+                                         customdata=weeks, hovertemplate=hov(name), line=dict(width=0.6, color=col),
+                                         fillcolor=_insp_rgba(col, 0.75)))
+        sub = "Marketing year to date by week ending Thursday, against last year and the 6-year range."
+    if sel_week < last_w:
+        x = dates[sel_week - 1].strftime("%Y-%m-%d")
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, xref="x", yref="paper",
+                      line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    word = "weekly" if view == "Weekly" else "cumulative"
+    _insp_style(fig, 400, f"{grain} export inspections, {my_label}: {word} volume ({unit})", sub, logo=logo,
+                y_title=unit if view == "Weekly" else f"Cumulative {unit}")
+    if last_w <= 14:                                        # early in a marketing year: a tick for every week
+        fig.update_xaxes(tickformat="%b %d", dtick=7 * 86_400_000, tickmode="linear", tick0=dates[0].strftime("%Y-%m-%d"),
+                         hoverformat="%b %d, %Y")
+    else:
+        fig.update_xaxes(tickformat="%b %y", dtick="M1", hoverformat="%b %d, %Y")
+    fig.update_yaxes(tickformat=",")
+    return fig
 
 
-def _insp_tile(label, value, sub="", delta=None, accent=None):
-    accent = accent or JSA_CYAN
-    d = ""
-    if delta is not None:
-        c = "#4caf50" if delta >= 0 else "#ef5350"
-        s = "+" if delta >= 0 else ""
-        d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{delta:.1f}%</div>'
-    return (
-        f'<div style="background:#1e2124;border:1px solid #2e353d;'
-        f'border-top:3px solid {accent};border-radius:6px;'
-        f'padding:12px 16px;text-align:center;flex:1;min-width:140px;">'
-        f'<div style="font-size:9px;font-weight:700;color:#5a6878;'
-        f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">{label}</div>'
-        f'<div style="font-size:22px;font-weight:700;color:{JSA_CYAN};'
-        f'line-height:1.1;font-family:Arial;">{value}</div>'
-        f'<div style="font-size:10px;color:#5a6878;margin-top:2px;">{sub}</div>'
-        f'{d}</div>'
-    )
+def _insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, grain, start_month, logo):
+    """One line per marketing year over the marketing-year weeks: the selected year in blue, last year terracotta,
+    older years in sage shades (darker = more recent), plus the 6-year Olympic average."""
+    mat = M if view == "Weekly" else C
+    prior = [y for y in mat.index if y < sel_my]
+    pick = {"5 prior years": prior[-5:], "10 prior years": prior[-10:], "All years": prior}.get(years_mode, prior[-5:]) + [sel_my]
+    weeks = list(mat.columns)
+    prior6 = [y for y in mat.index if y < sel_my][-6:]
+    fig = go.Figure()
+    older = sorted(y for y in pick if y not in (sel_my, sel_my - 1))
+    dec = _insp_dec(unit, mat.loc[sel_my].max())
+    for y in sorted(pick):
+        row = mat.loc[y].dropna()
+        if view == "Weekly" and smooth:
+            row = row.rolling(4, min_periods=1).mean()
+        lbl = f"{y}/{str(y + 1)[-2:]}"
+        if y == sel_my:
+            style = dict(color=_INSP_BLUE, width=3.6)
+        elif y == sel_my - 1:
+            style = dict(color=_INSP_TERRA, width=2.2)
+        else:
+            style = dict(color=_insp_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3)
+        fig.add_trace(go.Scatter(x=row.index, y=row.values, mode="lines", name=lbl, line=style,
+                                 hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>{lbl}</extra>"))
+    oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+    if view == "Weekly" and smooth:
+        oly = pd.Series(oly, dtype="float").rolling(4, min_periods=1).mean().tolist()
+    fig.add_trace(go.Scatter(x=weeks, y=oly, mode="lines", name="6-yr Olympic avg", line=dict(color=_INSP_SAGE, width=2.2, dash="dash"),
+                             hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>6-yr Olympic avg</extra>"))
+    vals, text = _insp_month_ticks(first_thu, len(weeks))
+    word = "weekly (4-week average)" if (view == "Weekly" and smooth) else ("weekly" if view == "Weekly" else "cumulative")
+    _insp_style(fig, 420, f"{grain} export inspections by marketing-year week: {word} ({unit})",
+                f"Marketing years overlaid; months on the axis follow {sel_my}/{str(sel_my + 1)[-2:]}.", logo=logo,
+                x_title="Marketing-year week", y_title=unit if view == "Weekly" else f"Cumulative {unit}")
+    fig.update_xaxes(tickmode="array", tickvals=vals, ticktext=[f"{t}" for t in text], range=[0.5, len(weeks) + 0.5])
+    fig.update_yaxes(tickformat=",")
+    return fig
 
 
-def _run_export_inspections_tab():
-    """Enhanced FGIS Export Inspections tab — full drill-down filters."""
-
-    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
-
-    # ── Top controls ──────────────────────────────────────────────────────────
-    c1, c2 = st.columns([2, 2])
-    with c1:
-        grain_label = st.selectbox("Commodity", list(_INSP_GRAINS.keys()),
-                                   key="insp_grain")
-    grain_code = _INSP_GRAINS[grain_label]
-
-    with st.spinner(f"Loading {grain_label} inspection data…"):
-        raw = _load_fgis_detail(grain_code)
-
-    if raw.empty:
-        st.warning("No FGIS inspection data available. Try refreshing.")
-        return
-
-    df = _fgis_add_my(raw, grain_label)
-
-    all_my = sorted(df["my"].unique(), reverse=True)
-    cur_my = all_my[0]
-    my_labels = [
-        f"Current MY YTD ({cur_my}/{str(cur_my+1)[-2:]})" if m == cur_my
-        else f"{m}/{str(m+1)[-2:]}"
-        for m in all_my
-    ]
-    with c2:
-        my_sel_label = st.selectbox("Marketing Year", my_labels, key="insp_my")
-    sel_my = all_my[my_labels.index(my_sel_label)]
-
-    # ── Filter panel ──────────────────────────────────────────────────────────
-    df_my_full = df[df["my"] == sel_my].copy()
-
-    all_dests    = sorted(df_my_full["dest"].dropna().unique().tolist())
-    all_ports    = sorted(df_my_full["port_group"].dropna().unique().tolist())
-    all_carriers = sorted(df_my_full["carrier"].dropna().unique().tolist())
-    all_weeks    = sorted(df_my_full["week"].dropna().unique().tolist())
-
-    with st.expander("🔽  Filters", expanded=True):
-        fa, fb, fc = st.columns(3)
-        with fa:
-            sel_dests = st.multiselect(
-                "Destination", all_dests, default=[],
-                key="insp_dest",
-                help="Leave blank to include all destinations",
-            )
-        with fb:
-            sel_ports = st.multiselect(
-                "Port Region", all_ports, default=[],
-                key="insp_port",
-                help="Leave blank to include all port regions",
-            )
-        with fc:
-            sel_carriers = st.multiselect(
-                "Carrier Type", all_carriers, default=[],
-                key="insp_carrier",
-                help="Leave blank to include all carrier types",
-            )
-        fd, fe = st.columns(2)
-        with fd:
-            _wk_lo = int(min(all_weeks)) if all_weeks else 1
-            _wk_hi = int(max(all_weeks)) if all_weeks else 52
-            if _wk_lo < _wk_hi:
-                week_range = st.slider(
-                    "Week Range (ISO week)",
-                    min_value=_wk_lo, max_value=_wk_hi, value=(_wk_lo, _wk_hi),
-                    key="insp_week_range",
-                )
-            else:       # a slider needs min < max: early in a marketing year only one week is in
-                week_range = (_wk_lo, _wk_hi)
-                st.caption(f"Week range: ISO week {_wk_lo} (only one week reported so far)")
-        with fe:
-            top_n_dests = st.slider("Top N destinations", 5, 40, 20,
-                                    key="insp_top_n")
-
-    # Apply filters
-    df_my = df_my_full.copy()
-    if sel_dests:
-        df_my = df_my[df_my["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_my = df_my[df_my["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_my = df_my[df_my["carrier"].isin(sel_carriers)]
-    df_my = df_my[(df_my["week"] >= week_range[0]) & (df_my["week"] <= week_range[1])]
-
-    active_filters = bool(sel_dests or sel_ports or sel_carriers
-                          or week_range != (min(all_weeks, default=1),
-                                            max(all_weeks, default=52)))
-    if active_filters:
-        st.caption(
-            f"Filters active — showing {len(df_my):,} rows "
-            f"({df_my['mt'].sum()/1000:,.0f} TMT)"
-        )
-
-    if df_my.empty:
-        st.warning("No data matches current filters.")
-        return
-
-    # ── Stat tiles (always from unfiltered MY for context; filtered for value) ─
-    latest_week = int(df_my_full["week"].max())
-    prev_week   = latest_week - 1 if latest_week > 1 else None
-
-    cur_wk_mt  = df_my[df_my["week"] == latest_week]["mt"].sum() / 1000
-    prev_wk_mt_raw = df_my_full[df_my_full["week"] == prev_week]["mt"].sum() / 1000 if prev_week else None
-    ytd_mt     = df_my["mt"].sum() / 1000
-
-    prior_my   = sel_my - 1
-    df_prior_full = df[(df["my"] == prior_my) & (df["week"] <= latest_week)]
-    if sel_dests:
-        df_prior_full = df_prior_full[df_prior_full["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_prior_full = df_prior_full[df_prior_full["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_prior_full = df_prior_full[df_prior_full["carrier"].isin(sel_carriers)]
-    prior_ytd = df_prior_full["mt"].sum() / 1000 if not df_prior_full.empty else None
-
-    wow_delta = ((cur_wk_mt / prev_wk_mt_raw - 1) * 100) if prev_wk_mt_raw else None
-    ytd_delta = ((ytd_mt / prior_ytd - 1) * 100) if prior_ytd else None
-
-    dest_totals = df_my.groupby("dest")["mt"].sum()
-    top_dest    = dest_totals.idxmax() if not dest_totals.empty else "—"
-    top_dest_mt = dest_totals.max() / 1000 if not dest_totals.empty else 0
-
-    tiles_html = (
-        _insp_tile("Latest Week", f"{cur_wk_mt:,.0f}", "TMT", wow_delta, JSA_CYAN) +
-        _insp_tile("YTD Total", f"{ytd_mt:,.0f}", f"TMT · thru wk {latest_week}", ytd_delta, JSA_GREEN) +
-        _insp_tile("Top Destination", top_dest, f"{top_dest_mt:,.0f} TMT YTD", accent="#f9a825") +
-        _insp_tile("Weeks in Range", str(int(df_my["week"].nunique())),
-                   f"wk {week_range[0]}–{week_range[1]}", accent="#78909c")
-    )
-    st.markdown(
-        f'<div style="display:flex;gap:10px;margin:12px 0 18px;">{tiles_html}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(_DIV, unsafe_allow_html=True)
-
-    # ── Monthly labels for x-axis ─────────────────────────────────────────────
-    _my_month_labels = (
-        ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
-        if grain_label == "Wheat"
-        else ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
-    )
-
-    # ── Charts row 1: Port breakdown + Carrier breakdown ──────────────────────
-    col_port, col_carr = st.columns(2)
-
-    with col_port:
-        st.markdown("#### Port Region by Month")
-        port_df = (
-            df_my.groupby(["my_month_pos", "port_group"])["mt"]
-            .sum().reset_index()
-        )
-        port_df["tmt"] = port_df["mt"] / 1000
-        fig_port = go.Figure()
-        for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
-            sub = port_df[port_df["port_group"] == pg].sort_values("my_month_pos")
-            if sub.empty:
-                continue
-            fig_port.add_trace(go.Bar(
-                x=sub["my_month_pos"], y=sub["tmt"],
-                name=pg, marker_color=_PORT_GROUP_COLORS.get(pg, "#78909c"),
-            ))
-        fig_port.update_layout(
-            barmode="stack",
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title="MY Month", gridcolor="#2e353d",
-                       tickmode="array", tickvals=list(range(1, 13)),
-                       ticktext=_my_month_labels),
-            yaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=320,
-        )
-        st.plotly_chart(fig_port, use_container_width=True)
-
-    with col_carr:
-        st.markdown("#### Carrier Type")
-        carr_df = (
-            df_my.groupby("carrier")["mt"].sum()
-            .reset_index().sort_values("mt", ascending=False)
-        )
-        carr_df["tmt"] = carr_df["mt"] / 1000
-        colors = [_CARRIER_COLORS.get(c, "#8a9aaa") for c in carr_df["carrier"]]
-        fig_carr = go.Figure(go.Pie(
-            labels=carr_df["carrier"], values=carr_df["tmt"],
-            marker=dict(colors=colors, line=dict(color="#1e2124", width=2)),
-            hole=0.45,
-            textfont=dict(color="#cdd9e5", size=11),
-            hovertemplate="%{label}: %{value:,.0f} TMT (%{percent})<extra></extra>",
-        ))
-        fig_carr.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=320,
-        )
-        st.plotly_chart(fig_carr, use_container_width=True)
-
-    # ── Top destinations bar ──────────────────────────────────────────────────
-    st.markdown("#### Top Destinations (YTD)")
-    dest_df = (
-        df_my.groupby("dest")["mt"].sum().reset_index()
-        .sort_values("mt", ascending=True)
-    )
-    dest_df["tmt"] = dest_df["mt"] / 1000
-    top_n = dest_df.tail(top_n_dests)
-
-    fig_dest = go.Figure(go.Bar(
-        x=top_n["tmt"], y=top_n["dest"],
-        orientation="h", marker_color=JSA_CYAN,
-        text=top_n["tmt"].apply(lambda v: f"{v:,.0f}"),
-        textposition="outside",
-        hovertemplate="%{y}: %{x:,.0f} TMT<extra></extra>",
+def _insp_fig_map(view_df, wk_df, ytd_df, unit, title, subtitle):
+    g = view_df[view_df["iso3"].notna()].groupby("iso3")["v"].sum()
+    g = g[g > 0]
+    if g.empty:
+        return None
+    top_name = (view_df[view_df["iso3"].notna()].groupby(["iso3", "dest"])["v"].sum().reset_index()
+                .sort_values("v", ascending=False).drop_duplicates("iso3").set_index("iso3")["dest"])
+    wk_by = wk_df.groupby("iso3")["v"].sum()
+    ytd_by = ytd_df.groupby("iso3")["v"].sum()
+    mx = float(g.max())
+    fr = [0.0, 0.25, 0.5, 0.75, 1.0]
+    fig = go.Figure(go.Choropleth(
+        locations=g.index, z=np.sqrt(g.values), locationmode="ISO-3",
+        text=[top_name.get(i, i) for i in g.index],
+        customdata=np.column_stack([[ _insp_fmt(wk_by.get(i, 0.0), unit) for i in g.index],
+                                    [ _insp_fmt(ytd_by.get(i, 0.0), unit) for i in g.index]]),
+        hovertemplate=f"<b>%{{text}}</b><br>Week: %{{customdata[0]}} {unit}<br>Marketing year to date: %{{customdata[1]}} {unit}<extra></extra>",
+        colorscale=[[0, "#e9f0eb"], [0.2, "#c5dacd"], [0.5, "#86b196"], [0.75, "#4a8764"], [1, "#1f4d37"]],
+        zmin=0, zmax=float(np.sqrt(mx)), marker_line_color="#ffffff", marker_line_width=0.6,
+        colorbar=dict(title=dict(text=unit, font=dict(size=11, color=_INSP_MUTED)), thickness=12, len=0.7, outlinewidth=0,
+                      tickfont=dict(size=10, color=_INSP_MUTED),
+                      tickvals=[float(np.sqrt(mx * f * f)) for f in fr], ticktext=[_insp_fmt(mx * f * f, unit) for f in fr]),
     ))
-    fig_dest.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(gridcolor="#2e353d", showgrid=False),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=max(300, len(top_n) * 22),
-    )
-    st.plotly_chart(fig_dest, use_container_width=True)
+    fig.update_geos(projection_type="natural earth", showframe=False, showcoastlines=False, showland=True,
+                    landcolor="#f1f4f2", showcountries=True, countrycolor="#dfe7e2", showocean=False,
+                    bgcolor=_INSP_SURF, lataxis_range=[-56, 84])
+    _insp_style(fig, 440, title, subtitle, legend=False, hover="closest")
+    fig.update_layout(margin=dict(l=0, r=0, t=84, b=0))
+    return fig
 
-    # ── Destination × Port Region stacked bar ─────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Destination by Port Region")
 
-    dest_port_df = (
-        df_my.groupby(["dest", "port_group"])["mt"].sum().reset_index()
-    )
-    dest_port_df["tmt"] = dest_port_df["mt"] / 1000
-    # Restrict to top N dests
-    top_dest_names = (
-        dest_port_df.groupby("dest")["tmt"].sum()
-        .nlargest(top_n_dests).index.tolist()
-    )
-    dest_port_df = dest_port_df[dest_port_df["dest"].isin(top_dest_names)]
-    dest_order = (
-        dest_port_df.groupby("dest")["tmt"].sum()
-        .sort_values().index.tolist()
-    )
+def _insp_fig_hbar(frame, by, seg, top_n, unit, title, subtitle, logo=None):
+    """Horizontal bars of volume by `by` (a column of `frame`), largest on top, stacked by the segment dimension
+    unless that is the same thing as `by`."""
+    tot = frame.groupby(by)["v"].sum().sort_values(ascending=False).head(top_n)
+    tot = tot[tot > 0]
+    if tot.empty:
+        return None
+    order = list(tot.index[::-1])
+    sub_frame = frame[frame[by].isin(order)]
+    seg_on = seg != "None" and _INSP_SEG_COL.get(seg) != by
+    fig = go.Figure()
+    if seg_on:
+        labels = _insp_seg_labels(sub_frame, seg, top=6)
+        pv = sub_frame.assign(seg=labels).groupby([by, "seg"])["v"].sum().unstack("seg").reindex(order).fillna(0.0)
+        for i, name in enumerate(pv.sum(axis=0).sort_values(ascending=False).index):
+            fig.add_trace(go.Bar(x=pv[name], y=pv.index, orientation="h", name=name, marker_color=_insp_seg_color(name, seg, i),
+                                 hovertemplate=f"%{{y}}: %{{x:,.1f}} {unit}<extra>{name}</extra>"))
+        fig.update_layout(barmode="stack")
+    else:
+        if by == "region":
+            colors = [_INSP_REGION_COLOR.get(o, _INSP_BLUE) for o in order]
+        elif by == "port":                                  # a port wears its region's colour
+            reg = frame.drop_duplicates("port").set_index("port")["region"]
+            colors = [_INSP_REGION_COLOR.get(reg.get(o), _INSP_BLUE) for o in order]
+        else:
+            colors = _INSP_BLUE
+        fig.add_trace(go.Bar(x=[tot[o] for o in order], y=order, orientation="h", marker_color=colors, name="Volume",
+                             hovertemplate=f"%{{y}}: %{{x:,.1f}} {unit}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[tot[o] for o in order], y=order, mode="text", text=[_insp_fmt(tot[o], unit) for o in order],
+                             textposition="middle right", textfont=dict(size=11, color=_INSP_MUTED), showlegend=False,
+                             hoverinfo="skip", cliponaxis=False))
+    _insp_style(fig, max(300, 27 * len(order) + 110), title, subtitle, legend=seg_on, hover="closest", logo=logo,
+                x_title=unit)
+    fig.update_xaxes(range=[0, float(tot.max()) * 1.2], tickformat=",")
+    fig.update_yaxes(showgrid=False, automargin=True)
+    return fig
 
-    fig_dp = go.Figure()
-    for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
-        sub = dest_port_df[dest_port_df["port_group"] == pg]
-        sub = sub.set_index("dest").reindex(dest_order).reset_index()
-        fig_dp.add_trace(go.Bar(
-            x=sub["tmt"], y=sub["dest"],
-            orientation="h", name=pg,
-            marker_color=_PORT_GROUP_COLORS.get(pg, "#78909c"),
-        ))
-    fig_dp.update_layout(
-        barmode="stack",
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(gridcolor="#2e353d", showgrid=False),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=max(320, len(dest_order) * 22),
-    )
-    st.plotly_chart(fig_dp, use_container_width=True)
 
-    # ── Seasonal cumulative chart ─────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Seasonal Cumulative Inspections")
+def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8):
+    tot = frame.groupby(by)["v"].sum().sort_values(ascending=False)
+    tot = tot[tot > 0]
+    if tot.empty:
+        return None
+    if len(tot) > top_n:
+        tot = pd.concat([tot.head(top_n), pd.Series({"Other": tot.iloc[top_n:].sum()})])
+    cols = [(colors or {}).get(n) or (_INSP_MIST if n == "Other" else _INSP_PAL[i % len(_INSP_PAL)])
+            for i, n in enumerate(tot.index)]
+    fig = go.Figure(go.Pie(labels=list(tot.index), values=tot.values, hole=0.56, sort=False, direction="clockwise",
+                           marker=dict(colors=cols, line=dict(color="#ffffff", width=2)),
+                           textinfo="label+percent", textposition="outside", textfont=dict(size=11, color=_INSP_TEXT),
+                           hovertemplate=f"%{{label}}: %{{value:,.1f}} {unit} (%{{percent}})<extra></extra>"))
+    fig.add_annotation(text=f"<b>{_insp_fmt(float(tot.sum()), unit)}</b><br><span style='font-size:11px'>{unit}</span>",
+                       x=0.5, y=0.5, showarrow=False, font=dict(size=16, color=_INSP_TEXT))
+    _insp_style(fig, 360, title, subtitle, legend=False, hover="closest")
+    fig.update_layout(margin=dict(l=40, r=40, t=84, b=20))
+    return fig
 
-    comp_my_opts = [f"{m}/{str(m+1)[-2:]}" for m in all_my if m != sel_my]
-    comp_sel = st.multiselect(
-        "Compare Marketing Years", comp_my_opts,
-        default=comp_my_opts[:5], key="insp_comp_my"
-    )
-    comp_starts = [int(l.split("/")[0]) for l in comp_sel]
-    all_chart_my = sorted(set([sel_my] + comp_starts))
 
-    # Apply same dest/port/carrier filters to seasonal data too
-    df_seas = df.copy()
-    if sel_dests:
-        df_seas = df_seas[df_seas["dest"].isin(sel_dests)]
-    if sel_ports:
-        df_seas = df_seas[df_seas["port_group"].isin(sel_ports)]
-    if sel_carriers:
-        df_seas = df_seas[df_seas["carrier"].isin(sel_carriers)]
+def _insp_render(use_bushels: bool) -> None:
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    logo = _load_logo_b64(LOGO_50YR_PATH)
 
-    wk_df = (
-        df_seas.groupby(["my", "week"])["mt"].sum().reset_index()
-        .sort_values(["my", "week"])
-    )
-    wk_df["tmt"] = wk_df["mt"] / 1000
+    # ── what to look at: grain, marketing year, week, weekly vs cumulative ────
+    c_grain, c_my, c_wk, c_view = st.columns([1.1, 1.1, 3.0, 1.4])
+    with c_grain:
+        grain = st.selectbox("Grain", list(_INSP_GRAINS), key="insp_grain")
+    code, start_month, lb = _INSP_GRAINS[grain]
+    try:
+        with st.spinner(f"Loading {grain.lower()} inspections…"):
+            df = _load_inspections(code, start_month)
+    except Exception as e:
+        st.error(f"**The FGIS inspections could not be read.** `{e}` Click **Refresh Data** above to try again.")
+        return
+    if df.empty:
+        st.info(f"No {grain.lower()} export inspections are on file.")
+        return
 
-    _SEAS_PALETTE = [
-        "#0693e3","#4a6741","#f9a825","#ef5350","#ab47bc",
-        "#26c6da","#ff7043","#78909c","#a5d6a7","#ffe082",
+    years = sorted((int(y) for y in df["my"].unique()), reverse=True)
+    my_name = {y: f"{y}/{str(y + 1)[-2:]}" for y in years}
+    with c_my:
+        picked = st.selectbox("Marketing year", [my_name[y] for y in years], key=f"insp_my_{code}")
+    sel_my = next(y for y in years if my_name[y] == picked)
+    my_label = my_name[sel_my]
+    last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
+    first_thu = _insp_first_thu(sel_my, start_month)
+
+    def week_end(n) -> pd.Timestamp:
+        return first_thu + pd.Timedelta(weeks=int(n) - 1)
+
+    with c_wk:
+        if last_w > 1:
+            sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
+                                            format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
+                                            key=f"insp_week_{code}_{sel_my}"))
+        else:
+            sel_week = 1                                   # a slider needs two positions: only one week is in so far
+            st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
+    with c_view:
+        view = st.segmented_control("View", ["Weekly", "Cumulative"], default="Weekly", key="insp_view") or "Weekly"
+
+    bu_ok = use_bushels and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    head = st.container()                                   # title and notes: filled in below, once the filters are known
+
+    # ── filters (they apply to every chart, the tiles and the table) ──────────
+    by_dest = df.groupby("dest")["mt"].sum().sort_values(ascending=False)
+    with st.expander("Filters", expanded=False):
+        f1, f2, f3, f4 = st.columns(4)
+        sel_cls = f1.multiselect("Class", sorted(df["cls"].unique()), key=f"insp_cls_{code}", placeholder="All classes")
+        sel_car = f2.multiselect("Carrier", sorted(df["carrier"].unique()), key=f"insp_car_{code}", placeholder="All carriers")
+        sel_reg = f3.multiselect("Origin region", sorted(df["region"].unique()), key=f"insp_reg_{code}", placeholder="All regions")
+        sel_dst = f4.multiselect("Destination", list(by_dest.index), key=f"insp_dst_{code}", placeholder="All destinations")
+        st.markdown("Segment the charts by")
+        seg = st.segmented_control("Segment by", ["None", "Origin", "Destination", "Carrier"], default="None",
+                                   key="insp_seg", label_visibility="collapsed") or "None"
+    mask = pd.Series(True, index=df.index)
+    for col, chosen in (("cls", sel_cls), ("carrier", sel_car), ("region", sel_reg), ("dest", sel_dst)):
+        if chosen:
+            mask &= df[col].isin(chosen)
+    dff = df[mask].copy()
+
+    dff["v"] = dff["lbs"] / lb / 1e6 if bu_ok else dff["mt"] / 1000.0
+    notes = [f"Latest week in the data: week ending {df['week_end'].max():%a %b %d, %Y} (USDA FGIS posts each week on Monday)."]
+    if use_bushels and lb is None:
+        notes.append(f"USDA defines no bushel weight for {grain.lower()}, so it stays in TMT.")
+    active = [f"{lab}: {', '.join(chosen)}" for lab, chosen in
+              (("class", sel_cls), ("carrier", sel_car), ("region", sel_reg), ("destination", sel_dst)) if chosen]
+    if active:
+        notes.append("Filtered to " + "; ".join(active) + ".")
+    with head:
+        st.markdown(
+            f'<div style="margin:6px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+            f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+            f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+            f'United States {_TITLE_COMMODITY.get(grain, grain)} Export Inspections</span>'
+            f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
+            unsafe_allow_html=True)
+        st.caption(" ".join(notes))
+
+    # ── pace numbers ──────────────────────────────────────────────────────────
+    M, C = _insp_matrices(df, dff)
+    prior6 = [y for y in M.index if y < sel_my][-6:]
+
+    def cell(mat, y, n):
+        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
+
+    w_cur, c_cur = cell(M, sel_my, sel_week), cell(C, sel_my, sel_week)
+    w_prev = cell(M, sel_my, sel_week - 1) if sel_week > 1 else None
+    w_ly, c_ly = cell(M, sel_my - 1, sel_week), cell(C, sel_my - 1, sel_week)
+    w_oly, c_oly = _insp_olympic(M, prior6, sel_week), _insp_olympic(C, prior6, sel_week)
+
+    cur = dff[dff["my"] == sel_my]
+    wk = cur[cur["my_week"] == sel_week]
+    ytd = cur[cur["my_week"] <= sel_week]
+    view_df = wk if view == "Weekly" else ytd
+
+    def top_lines(col):
+        s = view_df.groupby(col)["v"].sum().sort_values(ascending=False)
+        s = s[s > 0]
+        tot = float(s.sum())
+        if s.empty or tot <= 0:
+            return "—", [f'<div class="insp-line">nothing inspected</div>']
+        rest = " · ".join(f"{n} {v / tot * 100:.0f}%" for n, v in s.iloc[1:3].items() if v / tot >= 0.005)
+        return s.index[0], [f'<div class="insp-line"><b>{s.iloc[0] / tot * 100:.0f}%</b> of the {"week" if view == "Weekly" else "marketing year to date"}</div>',
+                            f'<div class="insp-line">{rest}</div>' if rest else ""]
+
+    t_dest, l_dest = top_lines("dest")
+    t_reg, l_reg = top_lines("region")
+    tiles = [
+        _insp_tile(f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}", _insp_fmt(w_cur, unit), unit,
+                   [_insp_delta_line(_insp_pct(w_cur, w_prev), "vs prior week"),
+                    _insp_delta_line(_insp_pct(w_cur, w_ly), "vs same week last year"),
+                    _insp_delta_line(_insp_pct(w_cur, w_oly), "vs 6-yr Olympic avg")]),
+        _insp_tile(f"{my_label} to date · through week {sel_week}", _insp_fmt(c_cur, unit), unit,
+                   [_insp_delta_line(_insp_pct(c_cur, c_ly), "vs last year"),
+                    _insp_delta_line(_insp_pct(c_cur, c_oly), "vs 6-yr Olympic avg")]),
+        _insp_tile("Top destination", f'<span style="font-size:1.35rem">{t_dest}</span>', "", l_dest),
+        _insp_tile("Top origin region", f'<span style="font-size:1.35rem">{t_reg}</span>', "", l_reg),
     ]
-    fig_seas = go.Figure()
-    for idx, my_yr in enumerate(sorted(all_chart_my, reverse=True)):
-        sub = wk_df[wk_df["my"] == my_yr].copy()
-        if sub.empty:
-            continue
-        sub["cum_tmt"] = sub["tmt"].cumsum()
-        is_cur = (my_yr == sel_my)
-        my_lbl = f"{my_yr}/{str(my_yr+1)[-2:]}"
-        color = JSA_CYAN if is_cur else _SEAS_PALETTE[idx % len(_SEAS_PALETTE)]
-        fig_seas.add_trace(go.Scatter(
-            x=sub["week"], y=sub["cum_tmt"],
-            mode="lines", name=my_lbl,
-            line=dict(color=color, width=2.5 if is_cur else 1.3,
-                      dash="solid" if is_cur else "dot"),
-            opacity=1.0 if is_cur else 0.7,
-            hovertemplate=f"{my_lbl} · Wk %{{x}}: %{{y:,.0f}} TMT<extra></extra>",
-        ))
-    fig_seas.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="ISO Week of Year", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(title="Cumulative TMT", gridcolor="#2e353d", showgrid=True),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10), height=400,
-    )
-    st.plotly_chart(fig_seas, use_container_width=True)
+    for col, html in zip(st.columns(4), tiles):
+        col.markdown(html, unsafe_allow_html=True)
 
-    # ── Detail table ──────────────────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Destination Detail Table")
-    tbl_df = (
-        df_my.groupby(["dest", "port_group", "carrier"])["mt"]
-        .sum().reset_index().sort_values("mt", ascending=False)
-    )
-    tbl_df["tmt"] = (tbl_df["mt"] / 1000).round(1)
-    tbl_df = tbl_df.rename(columns={
-        "dest": "Destination", "port_group": "Port Region",
-        "carrier": "Carrier", "tmt": "TMT",
-    })[["Destination", "Port Region", "Carrier", "TMT"]]
+    when = (f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}" if view == "Weekly"
+            else f"{my_label} to date · through week {sel_week} ({week_end(sel_week):%b %d, %Y})")
 
-    dl_col, _ = st.columns([1, 6])
-    with dl_col:
-        st.download_button(
-            "⬇ CSV", data=tbl_df.to_csv(index=False),
-            file_name=f"inspections_{grain_label}_{sel_my}.csv",
-            mime="text/csv", key="dl_insp_tbl",
-        )
-    st.dataframe(tbl_df, use_container_width=True, height=360)
+    # ── weekly pace ───────────────────────────────────────────────────────────
+    _insp_sec("Weekly pace")
+    _insp_plot(_insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, unit, grain, my_label, logo),
+               "insp_fig_weekly")
+
+    y1, y2, _ = st.columns([2, 1.4, 3])
+    with y1:
+        years_mode = st.segmented_control("Compare with", ["5 prior years", "10 prior years", "All years"],
+                                          default="5 prior years", key="insp_years") or "5 prior years"
+    smooth = False
+    if view == "Weekly":
+        with y2:
+            smooth = st.toggle("4-week average", key="insp_smooth", help="Smooths the weekly lines; weekly volumes swing with vessel timing.")
+    _insp_plot(_insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, grain, start_month, logo),
+               "insp_fig_multi")
+
+    # ── where it went ─────────────────────────────────────────────────────────
+    _insp_sec("Where it went")
+    if view_df["v"].sum() <= 0:
+        st.info("Nothing was inspected for these filters in the selected period.")
+    else:
+        fmap = _insp_fig_map(view_df, wk, ytd, unit, f"{grain} export inspections by destination ({unit})", when)
+        if fmap is not None:
+            _insp_plot(fmap, "insp_fig_map")
+            st.caption("Colour runs on a square-root scale so smaller buyers stay visible. Historical destinations "
+                       "(USSR, Yugoslavia) and island groups without a modern country outline are in the charts and table but not on the map.")
+        s1, _ = st.columns([1.6, 3.4])
+        top_n = s1.slider("Destinations shown", 5, 30, 12, key="insp_topn")
+        cl, cr = st.columns([3, 2])
+        fig = _insp_fig_hbar(view_df, "dest", seg, top_n, unit, f"Top destinations ({unit})", when, logo=logo)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_dest")
+        fig = _insp_fig_donut(view_df, "dest", unit, "Share by destination", when)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_pie")
+
+        # ── where it shipped from ─────────────────────────────────────────────
+        _insp_sec("Where it shipped from")
+        s2, _ = st.columns([1.6, 3.4])
+        with s2:
+            level = st.segmented_control("Origin by", ["Region", "Port"], default="Region", key="insp_lvl") or "Region"
+        by = "region" if level == "Region" else "port"
+        ol, orr = st.columns([3, 2])
+        fig = _insp_fig_hbar(view_df, by, seg, 20, unit, f"Inspections by U.S. {level.lower()} ({unit})", when, logo=logo)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_origin")
+        fig = _insp_fig_donut(view_df, "carrier", unit, "Share by carrier", when, colors=_INSP_CARRIER_COLOR)
+        if fig is not None:
+            _insp_plot(fig, "insp_fig_carrier")
+
+    # ── detail ────────────────────────────────────────────────────────────────
+    _insp_sec("Detail by destination")
+    ly_ytd = dff[(dff["my"] == sel_my - 1) & (dff["my_week"] <= sel_week)]
+    wk_col, ytd_col, ly_col = f"Week {sel_week}", f"{my_label} to date", "Same period last year"
+    tbl = pd.DataFrame({wk_col: wk.groupby("dest")["v"].sum(), ytd_col: ytd.groupby("dest")["v"].sum(),
+                        ly_col: ly_ytd.groupby("dest")["v"].sum()}).fillna(0.0)
+    tbl = tbl[(tbl[ytd_col] > 0) | (tbl[ly_col] > 0)].sort_values(ytd_col, ascending=False)
+    tbl["% vs last year"] = np.where(tbl[ly_col] > 0, (tbl[ytd_col] / tbl[ly_col].where(tbl[ly_col] > 0) - 1) * 100, np.nan)
+    tbl["Share of year to date"] = tbl[ytd_col] / tbl[ytd_col].sum() * 100 if tbl[ytd_col].sum() > 0 else np.nan
+    tbl.index.name = "Destination"
+    st.download_button("Download CSV", data=tbl.round(3).to_csv(), file_name=f"us_{code.lower()}_inspections_{my_label.replace('/', '-')}.csv",
+                       mime="text/csv", key="insp_dl")
+    vf = "{:,.1f}" if unit == "Mbu" else "{:,.0f}"
+    show = tbl.head(60).rename(columns={c: f"{c} ({unit})" for c in (wk_col, ytd_col, ly_col)})
+    show["% vs last year"] = show["% vs last year"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
+    _insp_table(show.style.format({show.columns[0]: vf, show.columns[1]: vf, show.columns[2]: vf,
+                                   "Share of year to date": "{:.1f}%"}, na_rep="—"), 420)
+
+    mo = pd.Timestamp(year=2000, month=start_month, day=1).strftime("%B")
+    st.markdown(
+        f'<div class="insp-note">Source: USDA Federal Grain Inspection Service export inspections (AMS AgTransport, '
+        f'"Grain Inspections"), by week ending Thursday. {grain} marketing years start on {mo} 1; a week that straddles '
+        f'the start is split by certificate date, so year-to-date totals follow USDA\'s marketing year (this is also how '
+        f'jpsi.com/export-inspections-dashboard counts them). Inspections are a leading indicator of exports, not a customs count: '
+        f'only grain actually inspected is captured, and rail and truck shipments to Canada and Mexico are inspected in part. '
+        f'"6-yr Olympic avg" drops the highest and lowest of the six prior marketing years, as elsewhere in this dashboard.</div>',
+        unsafe_allow_html=True)
+
+
+@st.fragment
+def _run_export_inspections_tab(use_bushels: bool = False):
+    """US export inspections tab. A fragment, so its filters rerun only this tab, not all ten."""
+    try:
+        _insp_render(use_bushels)
+    except Exception as e:
+        st.error(f"Inspections tab error: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6506,7 +6950,7 @@ def main():
     # ── Top-level commodity tabs ──────────────────────────────────────────
     corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
         ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
-         "🇨🇳  China Imports", "🔍  Inspections", "📈  Export Sales",
+         "🇨🇳  China Imports", "🔍  US Inspections", "📈  Export Sales",
          "🧭  Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
     )
 
@@ -6536,10 +6980,7 @@ def main():
             st.error(f"China Imports tab error: {_e}")
 
     with insp_tab:
-        try:
-            _run_export_inspections_tab()
-        except Exception as _e:
-            st.error(f"Inspections tab error: {_e}")
+        _run_export_inspections_tab(use_bushels)
 
     with esr_tab:
         try:
