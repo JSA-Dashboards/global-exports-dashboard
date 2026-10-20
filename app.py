@@ -33,11 +33,17 @@ import plotly.graph_objects as go
 import plotly.express as px
 import base64
 import os
+import re
+import threading
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import ssl
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from html import escape as _html_escape
 from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 
@@ -4707,8 +4713,8 @@ def _render_my_reference_tab():
 # US EXPORT INSPECTIONS TAB  (USDA FGIS "Grain Inspections", weekly)
 #   Source: USDA AMS AgTransport Socrata dataset sruw-w49i = Federal Grain Inspection Service export inspections,
 #   one row per certificate: week ending (Thursday), certificate month/year, carrier, class, destination, port,
-#   region, tonnes, pounds. Layout follows jpsi.com/export-inspections-dashboard (filters, destination map, pie,
-#   origin, destination, weekly series, multi-year overlay) plus this dashboard's pace comparisons and unit toggle.
+#   region, tonnes, pounds. Layout follows jpsi.com/export-inspections-dashboard (filters, pie, origin, destination,
+#   weekly series, multi-year overlay; its destination map is left out) plus this dashboard's pace comparisons and unit toggle.
 #   Marketing years split a week that straddles the 1st by certificate date (as jpsi.com does), so MYTD = USDA's.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4735,213 +4741,210 @@ _INSP_CLASS = {
     "BAR": "Barley", "MBLY": "Malting barley", "K": "Canola", "O": "Oats", "OATS": "Oats",
 }
 
-# FGIS destination label -> (display name, ISO-3 for the map; blank = historical or a region, not drawn)
+# FGIS destination label -> display name
 _FGIS_DEST_TABLE = """
-JAPAN|Japan|JPN
-CHINA|China|CHN
-MEXICO|Mexico|MEX
-KOREA REP|South Korea|KOR
-TAIWAN|Taiwan|TWN
-EGYPT|Egypt|EGY
-USSR|USSR (historical)|
-COLOMBIA|Colombia|COL
-NETHERLANDS|Netherlands|NLD
-SPAIN|Spain|ESP
-PHILIPPINES|Philippines|PHL
-INDONESIA|Indonesia|IDN
-CANADA|Canada|CAN
-NIGERIA|Nigeria|NGA
-VENEZUELA|Venezuela|VEN
-ALGERIA|Algeria|DZA
-ISRAEL|Israel|ISR
-SAUDI ARABIA|Saudi Arabia|SAU
-ITALY|Italy|ITA
-PERU|Peru|PER
-MOROCCO|Morocco|MAR
-DOMINICN REP|Dominican Republic|DOM
-THAILAND|Thailand|THA
-GERMANY|Germany|DEU
-COSTA RICA|Costa Rica|CRI
-GUATEMALA|Guatemala|GTM
-PORTUGAL|Portugal|PRT
-BRAZIL|Brazil|BRA
-PAKISTAN|Pakistan|PAK
-BELGIUM|Belgium|BEL
-EL SALVADOR|El Salvador|SLV
-TURKEY|Turkey|TUR
-BANGLADESH|Bangladesh|BGD
-VIETNAM|Vietnam|VNM
-HONDURAS|Honduras|HND
-IRAQ|Iraq|IRQ
-MALAYSIA|Malaysia|MYS
-TUNISIA|Tunisia|TUN
-YEMEN|Yemen|YEM
-REP S AFRICA|South Africa|ZAF
-PANAMA|Panama|PAN
-CHILE|Chile|CHL
-JAMAICA|Jamaica|JAM
-RUSSIA|Russia|RUS
-UN KINGDOM|United Kingdom|GBR
-ECUADOR|Ecuador|ECU
-JORDAN|Jordan|JOR
-SYRIA|Syria|SYR
-ETHIOPIA|Ethiopia|ETH
-SRI LANKA|Sri Lanka|LKA
-TRINIDAD|Trinidad and Tobago|TTO
-CUBA|Cuba|CUB
-FRANCE|France|FRA
-NICARAGUA|Nicaragua|NIC
-SUDAN|Sudan|SDN
-GERM FR (W)|West Germany (historical)|DEU
-INDIA|India|IND
-IRAN|Iran|IRN
-LEBANON|Lebanon|LBN
-POLAND|Poland|POL
-KENYA|Kenya|KEN
-MOZAMBIQUE|Mozambique|MOZ
-ROMANIA|Romania|ROU
-HAITI|Haiti|HTI
-GERM DR (E)|East Germany (historical)|DEU
-GREECE|Greece|GRC
-YUGOSLAVIA|Yugoslavia (historical)|
-BULGARIA|Bulgaria|BGR
-NORWAY|Norway|NOR
-GHANA|Ghana|GHA
-UZBEKISTAN|Uzbekistan|UZB
-UN ARAB EM|United Arab Emirates|ARE
-CYPRUS|Cyprus|CYP
-BARBADOS|Barbados|BRB
-IRELAND|Ireland|IRL
-SINGAPORE|Singapore|SGP
-ARGENTINA|Argentina|ARG
-BOLIVIA|Bolivia|BOL
-HONG KONG|Hong Kong|HKG
-UKRAINE|Ukraine|UKR
-DENMARK|Denmark|DNK
-ZAIRE|DR Congo|COD
-NORTH KOREA|North Korea|PRK
-ERITREA|Eritrea|ERI
-GEORGIA|Georgia|GEO
-SOMALIA|Somalia|SOM
-GUYANA|Guyana|GUY
-AFGHANISTAN|Afghanistan|AFG
-ZIMBABWE|Zimbabwe|ZWE
-LIBYA|Libya|LBY
-ANGOLA|Angola|AGO
-KUWAIT|Kuwait|KWT
-AUSTRALIA|Australia|AUS
-TANZANIA|Tanzania|TZA
-NIGER|Niger|NER
-FINLAND|Finland|FIN
-ST. VINCENT|St. Vincent and the Grenadines|VCT
-ARMENIA|Armenia|ARM
-CANARY IS|Canary Islands|
-MALTA|Malta|MLT
-NEW ZEALAND|New Zealand|NZL
-DJIBOUTI|Djibouti|DJI
-SURINAME|Suriname|SUR
-CAMEROON|Cameroon|CMR
-ZAMBIA|Zambia|ZMB
-MALAWI|Malawi|MWI
-BURMA|Myanmar|MMR
-SENEGAL|Senegal|SEN
-OMAN|Oman|OMN
-YEMEN (SANA)|Yemen|YEM
-TOGO|Togo|TGO
-BELIZE|Belize|BLZ
-NEPAL|Nepal|NPL
-KYRGYZSTAN|Kyrgyzstan|KGZ
-UGANDA|Uganda|UGA
-NAMIBIA|Namibia|NAM
-MAURITANIA|Mauritania|MRT
-GRENADA|Grenada|GRD
-MOLDOVA|Moldova|MDA
-BOSNIA-HERC|Bosnia and Herzegovina|BIH
-CONGO (KINS)|DR Congo|COD
-CHAD|Chad|TCD
-BENIN|Benin|BEN
-SLOVENIA|Slovenia|SVN
-CONGO (BRAZ)|Republic of the Congo|COG
-CAPE VERDE|Cape Verde|CPV
-LITHUANIA|Lithuania|LTU
-SIERRA LEONE|Sierra Leone|SLE
-LIBERIA|Liberia|LBR
-ESTONIA|Estonia|EST
-TURKMENISTAN|Turkmenistan|TKM
-RWANDA|Rwanda|RWA
-MONGOLIA|Mongolia|MNG
-COTE DIVOIRE|Cote d'Ivoire|CIV
-TAJIKISTAN|Tajikistan|TJK
-BELARUS|Belarus|BLR
-NETH ANTIL|Netherlands Antilles|
-ALBANIA|Albania|ALB
-HUNGARY|Hungary|HUN
-ST. LUCIA|St. Lucia|LCA
-MADAGASCAR|Madagascar|MDG
-URUGUAY|Uruguay|URY
-CROATIA|Croatia|HRV
-ICELAND|Iceland|ISL
-SWITZERLAND|Switzerland|CHE
-BURUNDI|Burundi|BDI
-GUINEA|Guinea|GIN
-BOTSWANA|Botswana|BWA
-MALI|Mali|MLI
-LATVIA|Latvia|LVA
-LEE WIND IS|Leeward and Windward Islands|
-BAHRAIN|Bahrain|BHR
-YEMEN (ADEN)|Yemen|YEM
-OTH WST AFR|Other West Africa|
-MACEDONIA|North Macedonia|MKD
-SOUTH SUDAN|South Sudan|SSD
-CAMBODIA|Cambodia|KHM
-GUADELOUPE|Guadeloupe|GLP
-BURKINA|Burkina Faso|BFA
-UNKNOWN|Unknown|
-GABON|Gabon|GAB
-ESWATINI|Eswatini|SWZ
-AZERBAIJAN|Azerbaijan|AZE
-LESOTHO|Lesotho|LSO
-WEST BANK|West Bank|PSE
-MAURITIUS|Mauritius|MUS
-NEW GUINEA|Papua New Guinea|PNG
-MARTINIQUE|Martinique|MTQ
-S WST AFRICA|South West Africa (historical)|NAM
-COMOROS|Comoros|COM
-CZECH REP|Czech Republic|CZE
-SWEDEN|Sweden|SWE
-GAMBIA|Gambia|GMB
-FR WST IND|French West Indies|
-QATAR|Qatar|QAT
-FRENCH POLY|French Polynesia|PYF
-UPPER VOLTA|Burkina Faso|BFA
-SO PAC IS|South Pacific Islands|
-BAHAMAS|Bahamas|BHS
-MAYOTTE|Mayotte|MYT
-FR PAC IS|French Pacific Islands|
-OTHER PAC IS|Other Pacific Islands|
-CEN AFR REP|Central African Republic|CAF
-OTH SO ASIA|Other South Asia|
-VANUATU|Vanuatu|VUT
-BRUNEI|Brunei|BRN
-FR GUIANA|French Guiana|GUF
-AUSTRIA|Austria|AUT
-BHUTAN|Bhutan|BTN
-MACAO|Macao|MAC
-LAOS|Laos|LAO
-VATICAN CITY|Vatican City|VAT
-MALDIVES|Maldives|MDV
-COCOS IS|Cocos Islands|CCK
-SAO TOME&PR|Sao Tome and Principe|STP
-ST.KITTS&NEV|St. Kitts and Nevis|KNA
-FIJI|Fiji|FJI
-VIRGIN ISLAN|Virgin Islands|VIR
-REUNION|Reunion|REU
-TOKELAU|Tokelau|TKL
+JAPAN|Japan
+CHINA|China
+MEXICO|Mexico
+KOREA REP|South Korea
+TAIWAN|Taiwan
+EGYPT|Egypt
+USSR|USSR (historical)
+COLOMBIA|Colombia
+NETHERLANDS|Netherlands
+SPAIN|Spain
+PHILIPPINES|Philippines
+INDONESIA|Indonesia
+CANADA|Canada
+NIGERIA|Nigeria
+VENEZUELA|Venezuela
+ALGERIA|Algeria
+ISRAEL|Israel
+SAUDI ARABIA|Saudi Arabia
+ITALY|Italy
+PERU|Peru
+MOROCCO|Morocco
+DOMINICN REP|Dominican Republic
+THAILAND|Thailand
+GERMANY|Germany
+COSTA RICA|Costa Rica
+GUATEMALA|Guatemala
+PORTUGAL|Portugal
+BRAZIL|Brazil
+PAKISTAN|Pakistan
+BELGIUM|Belgium
+EL SALVADOR|El Salvador
+TURKEY|Turkey
+BANGLADESH|Bangladesh
+VIETNAM|Vietnam
+HONDURAS|Honduras
+IRAQ|Iraq
+MALAYSIA|Malaysia
+TUNISIA|Tunisia
+YEMEN|Yemen
+REP S AFRICA|South Africa
+PANAMA|Panama
+CHILE|Chile
+JAMAICA|Jamaica
+RUSSIA|Russia
+UN KINGDOM|United Kingdom
+ECUADOR|Ecuador
+JORDAN|Jordan
+SYRIA|Syria
+ETHIOPIA|Ethiopia
+SRI LANKA|Sri Lanka
+TRINIDAD|Trinidad and Tobago
+CUBA|Cuba
+FRANCE|France
+NICARAGUA|Nicaragua
+SUDAN|Sudan
+GERM FR (W)|West Germany (historical)
+INDIA|India
+IRAN|Iran
+LEBANON|Lebanon
+POLAND|Poland
+KENYA|Kenya
+MOZAMBIQUE|Mozambique
+ROMANIA|Romania
+HAITI|Haiti
+GERM DR (E)|East Germany (historical)
+GREECE|Greece
+YUGOSLAVIA|Yugoslavia (historical)
+BULGARIA|Bulgaria
+NORWAY|Norway
+GHANA|Ghana
+UZBEKISTAN|Uzbekistan
+UN ARAB EM|United Arab Emirates
+CYPRUS|Cyprus
+BARBADOS|Barbados
+IRELAND|Ireland
+SINGAPORE|Singapore
+ARGENTINA|Argentina
+BOLIVIA|Bolivia
+HONG KONG|Hong Kong
+UKRAINE|Ukraine
+DENMARK|Denmark
+ZAIRE|DR Congo
+NORTH KOREA|North Korea
+ERITREA|Eritrea
+GEORGIA|Georgia
+SOMALIA|Somalia
+GUYANA|Guyana
+AFGHANISTAN|Afghanistan
+ZIMBABWE|Zimbabwe
+LIBYA|Libya
+ANGOLA|Angola
+KUWAIT|Kuwait
+AUSTRALIA|Australia
+TANZANIA|Tanzania
+NIGER|Niger
+FINLAND|Finland
+ST. VINCENT|St. Vincent and the Grenadines
+ARMENIA|Armenia
+CANARY IS|Canary Islands
+MALTA|Malta
+NEW ZEALAND|New Zealand
+DJIBOUTI|Djibouti
+SURINAME|Suriname
+CAMEROON|Cameroon
+ZAMBIA|Zambia
+MALAWI|Malawi
+BURMA|Myanmar
+SENEGAL|Senegal
+OMAN|Oman
+YEMEN (SANA)|Yemen
+TOGO|Togo
+BELIZE|Belize
+NEPAL|Nepal
+KYRGYZSTAN|Kyrgyzstan
+UGANDA|Uganda
+NAMIBIA|Namibia
+MAURITANIA|Mauritania
+GRENADA|Grenada
+MOLDOVA|Moldova
+BOSNIA-HERC|Bosnia and Herzegovina
+CONGO (KINS)|DR Congo
+CHAD|Chad
+BENIN|Benin
+SLOVENIA|Slovenia
+CONGO (BRAZ)|Republic of the Congo
+CAPE VERDE|Cape Verde
+LITHUANIA|Lithuania
+SIERRA LEONE|Sierra Leone
+LIBERIA|Liberia
+ESTONIA|Estonia
+TURKMENISTAN|Turkmenistan
+RWANDA|Rwanda
+MONGOLIA|Mongolia
+COTE DIVOIRE|Cote d'Ivoire
+TAJIKISTAN|Tajikistan
+BELARUS|Belarus
+NETH ANTIL|Netherlands Antilles
+ALBANIA|Albania
+HUNGARY|Hungary
+ST. LUCIA|St. Lucia
+MADAGASCAR|Madagascar
+URUGUAY|Uruguay
+CROATIA|Croatia
+ICELAND|Iceland
+SWITZERLAND|Switzerland
+BURUNDI|Burundi
+GUINEA|Guinea
+BOTSWANA|Botswana
+MALI|Mali
+LATVIA|Latvia
+LEE WIND IS|Leeward and Windward Islands
+BAHRAIN|Bahrain
+YEMEN (ADEN)|Yemen
+OTH WST AFR|Other West Africa
+MACEDONIA|North Macedonia
+SOUTH SUDAN|South Sudan
+CAMBODIA|Cambodia
+GUADELOUPE|Guadeloupe
+BURKINA|Burkina Faso
+UNKNOWN|Unknown
+GABON|Gabon
+ESWATINI|Eswatini
+AZERBAIJAN|Azerbaijan
+LESOTHO|Lesotho
+WEST BANK|West Bank
+MAURITIUS|Mauritius
+NEW GUINEA|Papua New Guinea
+MARTINIQUE|Martinique
+S WST AFRICA|South West Africa (historical)
+COMOROS|Comoros
+CZECH REP|Czech Republic
+SWEDEN|Sweden
+GAMBIA|Gambia
+FR WST IND|French West Indies
+QATAR|Qatar
+FRENCH POLY|French Polynesia
+UPPER VOLTA|Burkina Faso
+SO PAC IS|South Pacific Islands
+BAHAMAS|Bahamas
+MAYOTTE|Mayotte
+FR PAC IS|French Pacific Islands
+OTHER PAC IS|Other Pacific Islands
+CEN AFR REP|Central African Republic
+OTH SO ASIA|Other South Asia
+VANUATU|Vanuatu
+BRUNEI|Brunei
+FR GUIANA|French Guiana
+AUSTRIA|Austria
+BHUTAN|Bhutan
+MACAO|Macao
+LAOS|Laos
+VATICAN CITY|Vatican City
+MALDIVES|Maldives
+COCOS IS|Cocos Islands
+SAO TOME&PR|Sao Tome and Principe
+ST.KITTS&NEV|St. Kitts and Nevis
+FIJI|Fiji
+VIRGIN ISLAN|Virgin Islands
+REUNION|Reunion
+TOKELAU|Tokelau
 """
-_FGIS_DEST = {
-    r[0]: (r[1], r[2] or None)
-    for r in (line.split("|") for line in _FGIS_DEST_TABLE.strip().splitlines())
-}
+_FGIS_DEST = dict(line.split("|") for line in _FGIS_DEST_TABLE.strip().splitlines())
 
 
 def _insp_first_thu(my: int, start_month: int) -> pd.Timestamp:
@@ -4983,7 +4986,7 @@ def _fgis_fetch_raw(grain_code: str) -> pd.DataFrame:
 
 
 def _fgis_prepare(raw: pd.DataFrame, start_month: int) -> pd.DataFrame:
-    """Raw grouped rows -> week_end, my (marketing-year start year), my_week, dest, iso3, region, port, carrier,
+    """Raw grouped rows -> week_end, my (marketing-year start year), my_week, dest, region, port, carrier,
     cls, mt, lbs. A marketing year runs from its start month by certificate date; its week n ends on the first
     Thursday on or after the 1st plus 7 x (n-1) days, so a straddling week is split between two years."""
     if raw is None or raw.empty:
@@ -5003,15 +5006,14 @@ def _fgis_prepare(raw: pd.DataFrame, start_month: int) -> pd.DataFrame:
     df["my_week"] = ((df["week_end"] - first_thu).dt.days // 7) + 1
     df = df[df["my_week"] >= 1].copy()
     dest = df["destination"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
-    df["dest"] = dest.map(lambda k: _FGIS_DEST.get(k, (k.title(), None))[0])
-    df["iso3"] = dest.map(lambda k: _FGIS_DEST.get(k, (None, None))[1])
+    df["dest"] = dest.map(lambda k: _FGIS_DEST.get(k, k.title()))
     reg = df["ams_reg"].fillna("").astype(str).str.upper().str.strip()
     df["region"] = reg.map(lambda k: _INSP_REGION.get(k, k.title() or "Other"))
     df["port"] = df["port"].fillna("").astype(str).str.strip().str.title().replace("", "Unknown")
     df["carrier"] = df["type_carrier_text"].fillna("OTHER").astype(str).str.strip().str.title()
     cls = df["class"].fillna("").astype(str).str.upper().str.strip()
     df["cls"] = cls.map(lambda k: _INSP_CLASS.get(k, k.title() if k else "Unclassed"))
-    return df[["week_end", "my", "my_week", "dest", "iso3", "region", "port", "carrier", "cls", "mt", "lbs"]].reset_index(drop=True)
+    return df[["week_end", "my", "my_week", "dest", "region", "port", "carrier", "cls", "mt", "lbs"]].reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -5042,8 +5044,52 @@ _INSP_CSS = """
 .insp-tile-unit { color:#5f7267; font-size:.8rem; font-weight:600; margin-left:5px; }
 .insp-line { color:#5f7267; font-size:.78rem; margin-top:5px; }
 .insp-note { color:#5f7267; font-size:.78rem; line-height:1.5; margin-top:8px; }
+/* the filter panel of the Inspections and Export Sales tabs: always open, tinted, with a sage spine */
+.st-key-insp_filters, .st-key-esr_filters { background:#f3f7f4; border:1px solid #c9d8cf !important;
+    border-left:5px solid #5e7164 !important; border-radius:10px; padding:2px 8px 8px; margin-bottom:4px; }
+.st-key-insp_reset, .st-key-esr_reset { display:flex; justify-content:flex-end; }
+.fp-title { color:#32373c; font-size:.92rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+.fp-sub { color:#5f7267; font-size:.82rem; margin-left:12px; }
+.fp-group { color:#5f7267; font-size:.74rem !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; margin:8px 0 calc(1rem - 8px) !important; }
+.fp-chips { margin:0 0 1rem !important; line-height:1.9; }
+.fp-lead, .fp-none { color:#5f7267; font-size:.8rem; margin-right:8px; }
+.fp-none { font-style:italic; }
+.fp-chip { display:inline-block; background:#e1ece5; color:#2d4636; border:1px solid #b9cfc0; border-radius:999px;
+    padding:1px 11px; margin:2px 6px 2px 0; font-size:.8rem; font-weight:600; }
+/* the Export Sales summary table */
+.esr-wrap { overflow-x:auto; }
+.esr-sum { width:100%; border-collapse:collapse; font-size:.86rem; }
+.esr-sum th { color:#5f7267; font-size:.66rem; text-transform:uppercase; letter-spacing:.06em; font-weight:600; text-align:right;
+    padding:8px 10px; border-bottom:2px solid #d7e2dc; white-space:nowrap; }
+.esr-sum td { text-align:right; padding:7px 10px; border-bottom:1px solid #e8eeea; color:#32373c; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.esr-sum th:first-child, .esr-sum td:first-child { text-align:left; }
+.esr-sum tr.cur td { background:#eef4f0; font-weight:700; }
+.esr-sum tr.chg td { color:#5f7267; }
+.esr-sum tr.gap td { padding:3px; border:0; }
+.esr-sum tr td.pos { color:#16a34a; font-weight:600; }
+.esr-sum tr td.neg { color:#dc2626; font-weight:600; }
 </style>
 """
+_INSP_RESET_KEYS = ("insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg")
+
+
+def _fp_reset(prefixes: tuple) -> None:
+    """on_click of a 'Reset filters' button: forget the widget state kept under these key prefixes, so every filter is back
+    at its default on the rerun this click triggers."""
+    for k in [k for k in st.session_state.keys() if str(k).startswith(prefixes)]:
+        del st.session_state[k]
+
+
+def _fp_group(text: str) -> None:
+    st.markdown(f'<p class="fp-group">{text}</p>', unsafe_allow_html=True)
+
+
+def _fp_chips(chips: list, none_text: str) -> str:
+    """What is narrowing the page right now, as pills; one quiet line when nothing is."""
+    if not chips:
+        return f'<p class="fp-chips"><span class="fp-none">{_html_escape(none_text)}</span></p>'
+    return ('<p class="fp-chips"><span class="fp-lead">Narrowed to</span>'
+            + "".join(f'<span class="fp-chip">{_html_escape(c)}</span>' for c in chips) + "</p>")
 
 
 def _insp_pct(a, b):
@@ -5272,37 +5318,6 @@ def _insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, gra
     return fig
 
 
-def _insp_fig_map(view_df, wk_df, ytd_df, unit, title, subtitle):
-    g = view_df[view_df["iso3"].notna()].groupby("iso3")["v"].sum()
-    g = g[g > 0]
-    if g.empty:
-        return None
-    top_name = (view_df[view_df["iso3"].notna()].groupby(["iso3", "dest"])["v"].sum().reset_index()
-                .sort_values("v", ascending=False).drop_duplicates("iso3").set_index("iso3")["dest"])
-    wk_by = wk_df.groupby("iso3")["v"].sum()
-    ytd_by = ytd_df.groupby("iso3")["v"].sum()
-    mx = float(g.max())
-    fr = [0.0, 0.25, 0.5, 0.75, 1.0]
-    fig = go.Figure(go.Choropleth(
-        locations=g.index, z=np.sqrt(g.values), locationmode="ISO-3",
-        text=[top_name.get(i, i) for i in g.index],
-        customdata=np.column_stack([[ _insp_fmt(wk_by.get(i, 0.0), unit) for i in g.index],
-                                    [ _insp_fmt(ytd_by.get(i, 0.0), unit) for i in g.index]]),
-        hovertemplate=f"<b>%{{text}}</b><br>Week: %{{customdata[0]}} {unit}<br>Marketing year to date: %{{customdata[1]}} {unit}<extra></extra>",
-        colorscale=[[0, "#e9f0eb"], [0.2, "#c5dacd"], [0.5, "#86b196"], [0.75, "#4a8764"], [1, "#1f4d37"]],
-        zmin=0, zmax=float(np.sqrt(mx)), marker_line_color="#ffffff", marker_line_width=0.6,
-        colorbar=dict(title=dict(text=unit, font=dict(size=11, color=_INSP_MUTED)), thickness=12, len=0.7, outlinewidth=0,
-                      tickfont=dict(size=10, color=_INSP_MUTED),
-                      tickvals=[float(np.sqrt(mx * f * f)) for f in fr], ticktext=[_insp_fmt(mx * f * f, unit) for f in fr]),
-    ))
-    fig.update_geos(projection_type="natural earth", showframe=False, showcoastlines=False, showland=True,
-                    landcolor="#f1f4f2", showcountries=True, countrycolor="#dfe7e2", showocean=False,
-                    bgcolor=_INSP_SURF, lataxis_range=[-56, 84])
-    _insp_style(fig, 440, title, subtitle, legend=False, hover="closest")
-    fig.update_layout(margin=dict(l=0, r=0, t=84, b=0))
-    return fig
-
-
 def _insp_fig_hbar(frame, by, seg, top_n, unit, title, subtitle, logo=None):
     """Horizontal bars of volume by `by` (a column of `frame`), largest on top, stacked by the segment dimension
     unless that is the same thing as `by`."""
@@ -5341,7 +5356,7 @@ def _insp_fig_hbar(frame, by, seg, top_n, unit, title, subtitle, logo=None):
     return fig
 
 
-def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8):
+def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8, min_label=0.0):
     tot = frame.groupby(by)["v"].sum().sort_values(ascending=False)
     tot = tot[tot > 0]
     if tot.empty:
@@ -5352,12 +5367,15 @@ def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8):
             for i, n in enumerate(tot.index)]
     fig = go.Figure(go.Pie(labels=list(tot.index), values=tot.values, hole=0.56, sort=False, direction="clockwise",
                            marker=dict(colors=cols, line=dict(color="#ffffff", width=2)),
-                           textinfo="label+percent", textposition="outside", textfont=dict(size=11, color=_INSP_TEXT),
+                           textinfo="label+percent" if not min_label else "text", textposition="outside",
+                           text=None if not min_label else [f"{n}<br>{v / tot.sum() * 100:.0f}%" if v / tot.sum() * 100 >= min_label else ""
+                                                            for n, v in tot.items()],
+                           textfont=dict(size=11, color=_INSP_TEXT),
                            hovertemplate=f"%{{label}}: %{{value:,.1f}} {unit} (%{{percent}})<extra></extra>"))
     fig.add_annotation(text=f"<b>{_insp_fmt(float(tot.sum()), unit)}</b><br><span style='font-size:11px'>{unit}</span>",
                        x=0.5, y=0.5, showarrow=False, font=dict(size=16, color=_INSP_TEXT))
     _insp_style(fig, 360, title, subtitle, legend=False, hover="closest")
-    fig.update_layout(margin=dict(l=40, r=40, t=84, b=20))
+    fig.update_layout(margin=dict(l=40, r=40, t=96, b=20))
     return fig
 
 
@@ -5365,82 +5383,84 @@ def _insp_render(use_bushels: bool) -> None:
     st.markdown(_INSP_CSS, unsafe_allow_html=True)
     logo = _load_logo_b64(LOGO_50YR_PATH)
 
-    # ── what to look at: grain, marketing year, week, weekly vs cumulative ────
-    c_grain, c_my, c_wk, c_view = st.columns([1.1, 1.1, 3.0, 1.4])
-    with c_grain:
-        grain = st.selectbox("Grain", list(_INSP_GRAINS), key="insp_grain")
-    code, start_month, lb = _INSP_GRAINS[grain]
-    try:
-        with st.spinner(f"Loading {grain.lower()} inspections…"):
-            df = _load_inspections(code, start_month)
-    except Exception as e:
-        st.error(f"**The FGIS inspections could not be read.** `{e}` Click **Refresh Data** above to try again.")
-        return
-    if df.empty:
-        st.info(f"No {grain.lower()} export inspections are on file.")
-        return
+    # ── filters: always on show, and they apply to the tiles, the table and every chart ──────────────────────────────
+    with st.container(border=True, key="insp_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="insp_reset", on_click=_fp_reset, args=(_INSP_RESET_KEYS,))
+        _fp_group("What to show")
+        c_grain, c_my, c_wk, c_view = st.columns([1.1, 1.1, 3.0, 1.4])
+        with c_grain:
+            grain = st.selectbox("Grain", list(_INSP_GRAINS), key="insp_grain")
+        code, start_month, lb = _INSP_GRAINS[grain]
+        try:
+            with st.spinner(f"Loading {grain.lower()} inspections…"):
+                df = _load_inspections(code, start_month)
+        except Exception as e:
+            st.error(f"**The FGIS inspections could not be read.** `{e}` Click **Refresh Data** above to try again.")
+            return
+        if df.empty:
+            st.info(f"No {grain.lower()} export inspections are on file.")
+            return
 
-    years = sorted((int(y) for y in df["my"].unique()), reverse=True)
-    my_name = {y: f"{y}/{str(y + 1)[-2:]}" for y in years}
-    with c_my:
-        picked = st.selectbox("Marketing year", [my_name[y] for y in years], key=f"insp_my_{code}")
-    sel_my = next(y for y in years if my_name[y] == picked)
-    my_label = my_name[sel_my]
-    last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
-    first_thu = _insp_first_thu(sel_my, start_month)
+        years = sorted((int(y) for y in df["my"].unique()), reverse=True)
+        my_name = {y: f"{y}/{str(y + 1)[-2:]}" for y in years}
+        with c_my:
+            picked = st.selectbox("Marketing year", [my_name[y] for y in years], key=f"insp_my_{code}")
+        sel_my = next(y for y in years if my_name[y] == picked)
+        my_label = my_name[sel_my]
+        last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
+        first_thu = _insp_first_thu(sel_my, start_month)
 
-    def week_end(n) -> pd.Timestamp:
-        return first_thu + pd.Timedelta(weeks=int(n) - 1)
+        def week_end(n) -> pd.Timestamp:
+            return first_thu + pd.Timedelta(weeks=int(n) - 1)
 
-    with c_wk:
-        if last_w > 1:
-            sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
-                                            format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
-                                            key=f"insp_week_{code}_{sel_my}"))
-        else:
-            sel_week = 1                                   # a slider needs two positions: only one week is in so far
-            st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
-    with c_view:
-        view = st.segmented_control("View", ["Weekly", "Cumulative"], default="Weekly", key="insp_view") or "Weekly"
+        with c_wk:
+            if last_w > 1:
+                sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
+                                                format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
+                                                key=f"insp_week_{code}_{sel_my}"))
+            else:
+                sel_week = 1                               # a slider needs two positions: only one week is in so far
+                st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
+        with c_view:
+            view = st.segmented_control("View", ["Weekly", "Cumulative"], default="Weekly", key="insp_view") or "Weekly"
 
-    bu_ok = use_bushels and lb is not None
-    unit = "Mbu" if bu_ok else "TMT"
-    head = st.container()                                   # title and notes: filled in below, once the filters are known
-
-    # ── filters (they apply to every chart, the tiles and the table) ──────────
-    by_dest = df.groupby("dest")["mt"].sum().sort_values(ascending=False)
-    with st.expander("Filters", expanded=False):
+        _fp_group("Narrow it down")
+        by_dest = df.groupby("dest")["mt"].sum().sort_values(ascending=False)
         f1, f2, f3, f4 = st.columns(4)
         sel_cls = f1.multiselect("Class", sorted(df["cls"].unique()), key=f"insp_cls_{code}", placeholder="All classes")
         sel_car = f2.multiselect("Carrier", sorted(df["carrier"].unique()), key=f"insp_car_{code}", placeholder="All carriers")
         sel_reg = f3.multiselect("Origin region", sorted(df["region"].unique()), key=f"insp_reg_{code}", placeholder="All regions")
         sel_dst = f4.multiselect("Destination", list(by_dest.index), key=f"insp_dst_{code}", placeholder="All destinations")
-        st.markdown("Segment the charts by")
-        seg = st.segmented_control("Segment by", ["None", "Origin", "Destination", "Carrier"], default="None",
-                                   key="insp_seg", label_visibility="collapsed") or "None"
+        sg, _ = st.columns([2.4, 2.6])
+        seg = sg.segmented_control("Split the charts by", ["None", "Origin", "Destination", "Carrier"], default="None",
+                                   key="insp_seg") or "None"
+        chips = [f"{lab}: {', '.join(chosen[:4])}" + (f" +{len(chosen) - 4} more" if len(chosen) > 4 else "") for lab, chosen in
+                 (("Class", sel_cls), ("Carrier", sel_car), ("Origin", sel_reg), ("Destination", sel_dst)) if chosen]
+        st.markdown(_fp_chips(chips, "No narrowing: every certificate is counted"), unsafe_allow_html=True)
+
     mask = pd.Series(True, index=df.index)
     for col, chosen in (("cls", sel_cls), ("carrier", sel_car), ("region", sel_reg), ("dest", sel_dst)):
         if chosen:
             mask &= df[col].isin(chosen)
     dff = df[mask].copy()
 
+    bu_ok = use_bushels and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
     dff["v"] = dff["lbs"] / lb / 1e6 if bu_ok else dff["mt"] / 1000.0
     notes = [f"Latest week in the data: week ending {df['week_end'].max():%a %b %d, %Y} (USDA FGIS posts each week on Monday)."]
     if use_bushels and lb is None:
         notes.append(f"USDA defines no bushel weight for {grain.lower()}, so it stays in TMT.")
-    active = [f"{lab}: {', '.join(chosen)}" for lab, chosen in
-              (("class", sel_cls), ("carrier", sel_car), ("region", sel_reg), ("destination", sel_dst)) if chosen]
-    if active:
-        notes.append("Filtered to " + "; ".join(active) + ".")
-    with head:
-        st.markdown(
-            f'<div style="margin:6px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
-            f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
-            f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
-            f'United States {_TITLE_COMMODITY.get(grain, grain)} Export Inspections</span>'
-            f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
-            unsafe_allow_html=True)
-        st.caption(" ".join(notes))
+    st.markdown(
+        f'<div style="margin:14px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'United States {_TITLE_COMMODITY.get(grain, grain)} Export Inspections</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
+        unsafe_allow_html=True)
+    st.caption(" ".join(notes))
 
     # ── pace numbers ──────────────────────────────────────────────────────────
     M, C = _insp_matrices(df, dff)
@@ -5509,11 +5529,6 @@ def _insp_render(use_bushels: bool) -> None:
     if view_df["v"].sum() <= 0:
         st.info("Nothing was inspected for these filters in the selected period.")
     else:
-        fmap = _insp_fig_map(view_df, wk, ytd, unit, f"{grain} export inspections by destination ({unit})", when)
-        if fmap is not None:
-            _insp_plot(fmap, "insp_fig_map")
-            st.caption("Colour runs on a square-root scale so smaller buyers stay visible. Historical destinations "
-                       "(USSR, Yugoslavia) and island groups without a modern country outline are in the charts and table but not on the map.")
         s1, _ = st.columns([1.6, 3.4])
         top_n = s1.slider("Destinations shown", 5, 30, 12, key="insp_topn")
         cl, cr = st.columns([3, 2])
@@ -5576,22 +5591,10 @@ def _run_export_inspections_tab(use_bushels: bool = False):
         st.error(f"Inspections tab error: {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EXPORT SALES TAB  (USDA FAS ESR API)
-# ─────────────────────────────────────────────────────────────────────────────
+# ── USDA FAS gateway: the Export Sales tab, the monthly US estimates and the PSD call all use it ──
 
 _ESR_GATEWAY = "https://api.fas.usda.gov"
 _ESR_API_KEY = "6hcX4IEwu7kreNrxoGQnPhctd6ozXmoPQTjk6Ewi"
-_ESR_COMMODITIES = {
-    "Corn":         401,
-    "Soybeans":     801,
-    "Soybean Meal": 901,
-    "Wheat - All":  107,
-    "Sorghum":      701,
-}
-_ESR_BU_FACTOR = {401: 39.368, 801: 36.744, 107: 36.744, 701: 39.368}
-# MT → MBU per 1 MT (multiply tmt by factor to get MBU)
-
 # ── Vessel Lineup constants ───────────────────────────────────────────────────
 _VL_GREEN      = _CH_SAGE
 _VL_GREEN_LT   = _CH_BLUE
@@ -5646,30 +5649,9 @@ _VL_BASE_LAYOUT = dict(
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_esr_countries() -> dict:
-    """ESR country code → description."""
-    try:
-        url = f"{_ESR_GATEWAY}/api/esr/countries?api_key={_ESR_API_KEY}"
-        with urllib.request.urlopen(url, timeout=15) as r:
-            data = json.loads(r.read())
-        return {c["countryCode"]: c["countryDescription"].strip() for c in data}
-    except Exception:
-        return {}
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_esr_release_dates() -> list:
-    try:
-        url = f"{_ESR_GATEWAY}/api/esr/datareleasedates?api_key={_ESR_API_KEY}"
-        with urllib.request.urlopen(url, timeout=15) as r:
-            return json.loads(r.read())
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
 def _load_esr_exports(commodity_code: int, market_year: int) -> list:
-    """ESR weekly export sales for one commodity + market year → list of records."""
+    """ESR weekly export sales for one commodity + market year → list of records (feeds the monthly US estimates;
+    the Export Sales tab has its own loader, _esr_history)."""
     try:
         url = (
             f"{_ESR_GATEWAY}/api/esr/exports/commodityCode/{commodity_code}"
@@ -5681,406 +5663,681 @@ def _load_esr_exports(commodity_code: int, market_year: int) -> list:
         return []
 
 
-def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
-    """Weekly Export Sales tab — USDA FAS ESR API with full drill-down filters."""
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPORT SALES TAB  (USDA FAS Export Sales Reporting, weekly)
+#   Source: the FAS ESR API, one call per commodity and marketing year, every destination, every week. Layout follows
+#   jpsi.com/export-sales-dashboard (summary table, weekly series, marketing-year overlay, destinations, country table)
+#   plus this dashboard's pace comparisons, filter panel and unit toggle; the destination map is left out.
+#   A marketing year's week n ends on the first Thursday on or after the year's first day plus 7 x (n-1) days (checked
+#   against the first report of every commodity), so "year ago" and the Olympic average are the same marketing-year week.
+#   ESR labels a year by the calendar year it ENDS in (corn 2026/27 = 2027); beef and pork run January-December.
+# ─────────────────────────────────────────────────────────────────────────────
 
-    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
-    dec  = 1 if use_bushels else 0
+# label -> (ESR commodity code, marketing-year start month, pounds per bushel or None where USDA has no bushel measure)
+_ESR_COMMODITIES = {
+    "Corn":          (401, 9, 56),
+    "Soybeans":      (801, 9, 60),
+    "Soybean meal":  (901, 10, None),
+    "Soybean oil":   (902, 10, None),
+    "Wheat - all":   (107, 6, 60),
+    "Wheat - SRW":   (102, 6, 60),
+    "Wheat - HRW":   (101, 6, 60),
+    "Wheat - HRS":   (103, 6, 60),
+    "Wheat - white": (104, 6, 60),
+    "Sorghum":       (701, 9, 56),
+    "Rice":          (1505, 8, None),
+    "Beef":          (1701, 1, None),
+    "Pork":          (1702, 1, None),
+}
+_ESR_START = {code: month for code, month, _lb in _ESR_COMMODITIES.values()}
+_ESR_DEPTH = 11                                    # marketing years loaded per commodity: the current one and ten before it
+_ESR_FIELDS = {                                    # ESR record field -> column (metric tons)
+    "currentMYNetSales": "net", "grossNewSales": "gross", "weeklyExports": "exp", "accumulatedExports": "acc",
+    "outstandingSales": "out", "currentMYTotalCommitment": "commit", "nextMYNetSales": "nxt_net",
+    "nextMYOutstandingSales": "nxt_out",
+}
+_ESR_COLS = ["week", "cc", "my", "wk"] + list(_ESR_FIELDS.values())
+# data type -> (column, True for a weekly flow that adds up over the year, False for a balance as of the week)
+_ESR_METRICS = {
+    "Net sales":                   ("net",     True),
+    "Gross new sales":             ("gross",   True),
+    "Weekly exports":              ("exp",     True),
+    "Accumulated exports":         ("acc",     False),
+    "Outstanding sales":           ("out",     False),
+    "Total commitments":           ("commit",  False),
+    "Net sales (next MY)":         ("nxt_net", True),
+    "Outstanding sales (next MY)": ("nxt_out", False),
+}
+_ESR_LABEL = {col: label for label, (col, _flow) in _ESR_METRICS.items()}
+_ESR_FLOW = {col: flow for _label, (col, flow) in _ESR_METRICS.items()}
+_ESR_RESET_KEYS = ("esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_")
+_ESR_NAME_FIX = {
+    "KOREA, REPUBLIC OF": "South Korea", "KOREA, DEMOCRATIC PEOPLE'S REP": "North Korea",
+    "CHINA, PEOPLES REPUBLIC OF": "China", "RUSSIAN FEDERATION": "Russia", "BYELARUS, REPUBLIC OF": "Belarus",
+    "EUROPEAN UNION - 27": "European Union", "UNKNOWN": "Unknown destination", "TANZANIA, UNITED REPUBLIC OF": "Tanzania",
+    "CONGO, DEMOCRATIC REPUBLIC OF": "DR Congo", "CONGO (BRAZZAVILLE)": "Congo (Brazzaville)",
+    "BOSNIA-HERCEGOVINA": "Bosnia and Herzegovina", "MACEDONIA (SKOPJE)": "North Macedonia",
+    "DJIBOUTI AFARS-ISSAS": "Djibouti", "MAURITIUS AND DEPENDENTS": "Mauritius", "MALTA & GOZO": "Malta",
+    "WESTERN SAMOA": "Samoa", "SURINAM": "Suriname", "COTE D'IVOIRE": "Cote d'Ivoire",
+    "VIRGIN ISLANDS OF THE U.S.": "US Virgin Islands", "OTHER PACIFIC ISLANDS, NEC": "Other Pacific Islands",
+    "WESTERN AFRICA, NEC": "Western Africa", "US MINOR OUTLYING ISLAND": "US Minor Outlying Islands",
+    "YEMEN (ADEN)": "Yemen", "ST. HELENA (BR W AFR)": "St. Helena", "FRENCH IND. OCEAN TERRITORY": "French Indian Ocean Territory",
+}
+_ESR_REGION_FIX = {"EUROPEAN UNION - 27": "European Union", "FORMER SOVIET UNION-12": "Former Soviet Union",
+                   "OTHER ASIA AND OCEANIA": "Other Asia & Oceania"}
+_ESR_TITLE = {"Soybeans": "Soybean", "Soybean meal": "Soybean Meal", "Soybean oil": "Soybean Oil", "Wheat - all": "Wheat",
+              "Wheat - SRW": "SRW Wheat", "Wheat - HRW": "HRW Wheat", "Wheat - HRS": "HRS Wheat", "Wheat - white": "White Wheat"}
 
-    # ── Connectivity check ────────────────────────────────────────────────────
-    with st.spinner("Loading ESR release dates…"):
-        release_dates = _load_esr_release_dates()
-    if not release_dates:
-        st.error("⚠️ Unable to reach the USDA FAS ESR API. Try refreshing.")
-        return
 
-    # ── Top controls: Commodity + Market Year ─────────────────────────────────
-    c1, c2 = st.columns([2, 2])
-    with c1:
-        commodity = st.selectbox(
-            "Commodity", list(_ESR_COMMODITIES.keys()), key="esr_commodity"
-        )
-    comm_code = _ESR_COMMODITIES[commodity]
-    bu_factor = _ESR_BU_FACTOR.get(comm_code)
+def _esr_name(raw: str) -> str:
+    """An ESR destination as it reads best: 'KOREA, REPUBLIC OF' -> 'South Korea', 'BAHAMAS, THE' -> 'Bahamas'."""
+    s = re.sub(r"\s+", " ", str(raw)).strip()
+    fixed = _ESR_NAME_FIX.get(s.upper())
+    if fixed:
+        return fixed
+    s = re.sub(r",\s*(REPUBLIC OF|THE)$", "", s, flags=re.I)
+    s = s.title()
+    return re.sub(r"(?<=\s)(And|Of|The)\b", lambda m: m.group(1).lower(), s)
 
-    comm_dates = sorted(
-        [d for d in release_dates if d["commodityCode"] == comm_code],
-        key=lambda d: d["marketYear"], reverse=True,
-    )
-    available_years = [d["marketYear"] for d in comm_dates]
-    cur_my = available_years[0] if available_years else pd.Timestamp.now().year
 
-    with c2:
-        my_opts = [
-            f"Current MY ({cur_my})" if y == cur_my else str(y)
-            for y in available_years
-        ]
-        my_sel_label = st.selectbox("Market Year", my_opts, key="esr_my")
-    sel_my_year = available_years[my_opts.index(my_sel_label)]
+def _esr_first_thu(code: int, my: int) -> pd.Timestamp:
+    """Week ending of week 1 of ESR marketing year `my` (the calendar year it ends in) of commodity `code`."""
+    month = _ESR_START[code]
+    return _insp_first_thu(my if month == 1 else my - 1, month)
 
-    # ── Fetch ─────────────────────────────────────────────────────────────────
-    with st.spinner(f"Fetching {commodity} MY {sel_my_year}…"):
-        records       = _load_esr_exports(comm_code, sel_my_year)
-        country_names = _load_esr_countries()
 
-    if not records:
-        st.warning(f"No ESR data for {commodity} MY {sel_my_year}.")
-        return
+def _esr_my_label(code: int, my: int) -> str:
+    return str(my) if _ESR_START[code] == 1 else f"{my - 1}/{str(my)[-2:]}"
 
-    def _cn(code):
-        return country_names.get(code, str(code)).title()
 
-    def _parse_esr(recs, my_year):
-        rows = []
-        for r in recs:
+def _esr_get(path: str):
+    """GET one ESR endpoint -> parsed JSON. Retries a rate-limit or gateway hiccup, then raises a RuntimeError that never
+    carries the URL (it holds the API key), so a bad moment is reported but never cached."""
+    url = f"{_ESR_GATEWAY}/api/esr/{path}?api_key={_ESR_API_KEY}"
+    why = "no answer"
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            why = f"HTTP {e.code}"
+            if e.code not in (429, 500, 502, 503, 504):
+                break
+        except Exception as e:                                  # timeouts, resets, a page that is not JSON
+            why = type(e).__name__
+        time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(f"the USDA export-sales service did not answer ({why}: {path.split('/')[0]})")
+
+
+def _esr_prepare(rows: list, code: int, my: int) -> pd.DataFrame:
+    """Raw ESR records of one commodity and marketing year -> week, cc (country code), my, wk (marketing-year week) and
+    the eight measures in metric tons."""
+    if not rows:
+        return pd.DataFrame(columns=_ESR_COLS)
+    raw = pd.DataFrame(rows)
+    df = pd.DataFrame({"week": pd.to_datetime(raw["weekEndingDate"], errors="coerce").dt.normalize(),
+                       "cc": pd.to_numeric(raw["countryCode"], errors="coerce")})
+    for field, col in _ESR_FIELDS.items():
+        df[col] = pd.to_numeric(raw[field], errors="coerce").fillna(0.0) if field in raw else 0.0
+    df = df.dropna(subset=["week", "cc"]).copy()
+    df["cc"] = df["cc"].astype(int)
+    df["my"] = int(my)
+    df["wk"] = ((df["week"] - _esr_first_thu(code, my)).dt.days // 7 + 1).astype(int)
+    return df[df["wk"] >= 1][_ESR_COLS].reset_index(drop=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _esr_catalog() -> dict:
+    """Destinations with their region, and each commodity's current marketing year. Raises on a failed call, so
+    st.cache_data never keeps an empty answer for an hour."""
+    regions = {int(r["regionId"]): _ESR_REGION_FIX.get(str(r["regionName"]).strip().upper(), str(r["regionName"]).strip().title())
+               for r in _esr_get("regions")}
+    country = {int(c["countryCode"]): (_esr_name(c["countryDescription"]), regions.get(c.get("regionId"), "Other"))
+               for c in _esr_get("countries")}
+    current: dict = {}
+    for d in _esr_get("datareleasedates"):
+        code = int(d["commodityCode"])
+        current[code] = max(int(d["marketYear"]), current.get(code, 0))
+    return {"country": country, "current": current}
+
+
+@st.cache_resource(ttl=3600, show_spinner=False)
+def _esr_store() -> dict:
+    """Prepared marketing-year frames, kept for an hour: {(commodity code, marketing year): DataFrame}. A resource, not
+    st.cache_data, so worker threads can fill it and a year fetched once is never fetched again when another is added."""
+    return {"lock": threading.Lock(), "frames": {}, "bad": {}}
+
+
+def _esr_fetch_my(code: int, my: int) -> pd.DataFrame:
+    return _esr_prepare(_esr_get(f"exports/commodityCode/{code}/allCountries/marketYear/{my}"), code, my)
+
+
+def _esr_history(code: int, current: int, depth: int = _ESR_DEPTH):
+    """(frame, failed years): the `depth` marketing years ending at `current`, every destination. Years not held yet are
+    fetched in parallel. A past year that fails is left out and tried again after five minutes (not on every click); the
+    current year failing raises."""
+    store = _esr_store()
+    years = [current - i for i in range(depth)]
+    now = time.time()
+    with store["lock"]:
+        todo = [y for y in years if (code, y) not in store["frames"] and now - store["bad"].get((code, y), (0.0, ""))[0] > 300]
+    failed: dict = {y: store["bad"][(code, y)][1] for y in years if (code, y) not in store["frames"] and y not in todo
+                    and (code, y) in store["bad"]}
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(6, len(todo))) as pool:
+            futures = {y: pool.submit(_esr_fetch_my, code, y) for y in todo}
+        for y, fut in futures.items():                          # the with-block has waited for every call
             try:
-                rows.append({
-                    "country_code": r["countryCode"],
-                    "country":      _cn(r["countryCode"]),
-                    "week_date":    pd.Timestamp(r["weekEndingDate"]),
-                    "net_sales":    r.get("currentMYNetSales", 0) / 1000,
-                    "exports":      r.get("weeklyExports", 0) / 1000,
-                    "gross_sales":  r.get("grossNewSales", 0) / 1000,
-                    "outstanding":  r.get("outstandingSales", 0) / 1000,
-                    "ytd_exports":  r.get("accumulatedExports", 0) / 1000,
-                    "ytd_commit":   r.get("currentMYTotalCommitment", 0) / 1000,
-                    "next_sales":   r.get("nextMYNetSales", 0) / 1000,
-                    "next_outstanding": r.get("nextMYOutstandingSales", 0) / 1000,
-                    "my_year":      my_year,
-                })
-            except Exception:
-                pass
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+                got = fut.result()
+            except Exception as e:
+                failed[y] = str(e)
+                with store["lock"]:
+                    store["bad"][(code, y)] = (time.time(), str(e))
+            else:
+                with store["lock"]:
+                    store["frames"][(code, y)] = got
+                    store["bad"].pop((code, y), None)
+    if current in failed:
+        raise RuntimeError(failed[current])
+    with store["lock"]:
+        frames = [store["frames"][(code, y)] for y in years if (code, y) in store["frames"]]
+    frames = [f for f in frames if not f.empty]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=_ESR_COLS)
+    return df, sorted(failed)
 
-    df_full = _parse_esr(records, sel_my_year)
-    if df_full.empty:
-        st.warning("Could not parse ESR records.")
-        return
 
-    numeric_cols = ["net_sales","exports","gross_sales","outstanding",
-                    "ytd_exports","ytd_commit","next_sales","next_outstanding"]
-    if use_bushels and bu_factor:
-        df_full[numeric_cols] = df_full[numeric_cols] * bu_factor
+def _keep_selected(options: list, key: str) -> list:
+    """`options` plus anything this widget already holds, so a selection never falls out of a list that shifted underneath it."""
+    held = [v for v in (st.session_state.get(key) or []) if v not in options]
+    return list(options) + held
 
-    all_countries = sorted(df_full["country"].dropna().unique().tolist())
-    all_weeks     = sorted(df_full["week_date"].unique())
-    latest_date   = df_full["week_date"].max()
-    latest_date_str = latest_date.strftime("%b %d, %Y")
 
-    # ── Metric definitions ────────────────────────────────────────────────────
-    _ESR_METRICS = {
-        "Net Sales":             "net_sales",
-        "Gross Sales":           "gross_sales",
-        "Weekly Exports":        "exports",
-        "Outstanding Sales":     "outstanding",
-        "YTD Exports":           "ytd_exports",
-        "YTD Commitment":        "ytd_commit",
-        "New Crop Net Sales":    "next_sales",
-        "New Crop Outstanding":  "next_outstanding",
-    }
-    _METRIC_COLORS = {
-        "net_sales":       _CH_BLUE,
-        "gross_sales":     "#5aa59a",
-        "exports":         _CH_SAGE,
-        "outstanding":     _CH_GOLD,
-        "ytd_exports":     _CH_LAV,
-        "ytd_commit":      _CH_TERRA,
-        "next_sales":      "#7b8fb5",
-        "next_outstanding":"#8fa398",
-    }
+def _esr_named(df: pd.DataFrame, cat: dict) -> pd.DataFrame:
+    """Adds the destination's name and region."""
+    out = df.copy()
+    out["country"] = out["cc"].map({c: v[0] for c, v in cat["country"].items()})
+    out["region"] = out["cc"].map({c: v[1] for c, v in cat["country"].items()})
+    lost = out["country"].isna()
+    if lost.any():                                              # a code the country list has not heard of
+        out.loc[lost, "country"] = "Destination " + out.loc[lost, "cc"].astype(str)
+        out.loc[lost, "region"] = "Other"
+    return out
 
-    # ── Filter panel ──────────────────────────────────────────────────────────
-    with st.expander("🔽  Filters", expanded=True):
-        fa, fb = st.columns([3, 2])
-        with fa:
-            sel_countries = st.multiselect(
-                "Destination Country", all_countries, default=[],
-                key="esr_countries",
-                help="Leave blank to include all countries",
-            )
-        with fb:
-            top_n_dest = st.slider("Top N destinations", 5, 40, 20,
-                                   key="esr_top_n")
 
-        fc, fd = st.columns(2)
-        with fc:
-            wk_metrics = st.multiselect(
-                "Weekly chart — metrics to show",
-                list(_ESR_METRICS.keys()),
-                default=["Net Sales", "Weekly Exports"],
-                key="esr_wk_metrics",
-            )
-        with fd:
-            cum_metric_label = st.selectbox(
-                "Cumulative chart — metric",
-                ["YTD Exports", "YTD Commitment", "Net Sales", "Outstanding Sales"],
-                key="esr_cum_metric",
-            )
+def _esr_matrices(df_all: pd.DataFrame, df_f: pd.DataFrame) -> dict:
+    """{column: DataFrame} with one row per marketing year and one column per marketing-year week, for the eight measures
+    of the filtered rows. Weeks a year never reached are NaN; weeks it reached with nothing in the filter are 0. The
+    week grid comes from the unfiltered rows, so a destination filter never shortens a year."""
+    last_w = df_all.groupby("my")["wk"].max().sort_index()
+    cols = list(range(1, int(last_w.max()) + 1))
+    in_range = pd.DataFrame(np.arange(1, len(cols) + 1)[None, :] <= last_w.to_numpy()[:, None],
+                            index=last_w.index, columns=cols)
+    g = df_f.groupby(["my", "wk"])[list(_ESR_FIELDS.values())].sum()
+    out = {}
+    for c in _ESR_FIELDS.values():
+        pv = g[c].unstack("wk") if len(g) else pd.DataFrame(index=last_w.index, columns=cols, dtype=float)
+        out[c] = pv.reindex(index=last_w.index, columns=cols).fillna(0.0).where(in_range)
+    return out
 
-        fe, _ = st.columns([3, 1])
-        with fe:
-            comp_my_opts = [str(y) for y in available_years if y != sel_my_year]
-            comp_my_sel = st.multiselect(
-                "Compare additional Market Years (cumulative chart)",
-                comp_my_opts,
-                default=comp_my_opts[:2],
-                key="esr_comp_my",
-            )
 
-    # Apply destination filter
-    df = df_full.copy()
-    if sel_countries:
-        df = df[df["country"].isin(sel_countries)]
-
-    if df.empty:
-        st.warning("No data matches current filters.")
-        return
-
-    # ── Latest / prior week snapshots ─────────────────────────────────────────
-    def _sum(frame, col):
-        return float(frame[col].sum()) if not frame.empty else 0.0
-
-    def _delta(cur, prev):
-        return ((cur / prev - 1) * 100) if prev and prev != 0 else None
-
-    latest    = df[df["week_date"] == latest_date]
-    prior_dates = sorted(df["week_date"].unique())
-    prev_date   = prior_dates[-2] if len(prior_dates) >= 2 else None
-    prev        = df[df["week_date"] == prev_date] if prev_date else pd.DataFrame()
-
-    wk_net  = _sum(latest, "net_sales")
-    wk_exp  = _sum(latest, "exports")
-    wk_out  = _sum(latest, "outstanding")
-    wk_ytd  = _sum(latest, "ytd_exports")
-    wk_comm = _sum(latest, "ytd_commit")
-
-    pw_net  = _sum(prev, "net_sales")
-    pw_exp  = _sum(prev, "exports")
-
-    # Prior MY for YoY
-    with st.spinner(""):
-        prior_recs = _load_esr_exports(comm_code, sel_my_year - 1)
-    df_py = _parse_esr(prior_recs, sel_my_year - 1)
-    if use_bushels and bu_factor and not df_py.empty:
-        df_py[numeric_cols] = df_py[numeric_cols] * bu_factor
-    if sel_countries and not df_py.empty:
-        df_py = df_py[df_py["country"].isin(sel_countries)]
-    py_latest = df_py[df_py["week_date"] == latest_date] if not df_py.empty else pd.DataFrame()
-    py_ytd    = _sum(py_latest, "ytd_exports")
-
-    # ── Stat tiles ────────────────────────────────────────────────────────────
-    def _esr_tile(label, val, sub="", pct=None, pct_label="WoW", acc=None):
-        acc = acc or JSA_CYAN
-        d = ""
-        if pct is not None:
-            c = "#4caf50" if pct >= 0 else "#ef5350"
-            s = "+" if pct >= 0 else ""
-            d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{pct:.1f}% {pct_label}</div>'
-        v = f"{val:,.{dec}f}"
-        return (
-            f'<div style="background:#1e2124;border:1px solid #2e353d;'
-            f'border-top:3px solid {acc};border-radius:6px;'
-            f'padding:12px 16px;text-align:center;flex:1;min-width:140px;">'
-            f'<div style="font-size:9px;font-weight:700;color:#5a6878;'
-            f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">{label}</div>'
-            f'<div style="font-size:22px;font-weight:700;color:{JSA_CYAN};'
-            f'line-height:1.1;font-family:Arial;">{v}</div>'
-            f'<div style="font-size:10px;color:#5a6878;margin-top:2px;">{sub}</div>'
-            f'{d}</div>'
-        )
-
-    tiles_html = (
-        _esr_tile("Weekly Net Sales",  wk_net,  unit_short, _delta(wk_net, pw_net), "WoW", JSA_CYAN) +
-        _esr_tile("Weekly Exports",    wk_exp,  unit_short, _delta(wk_exp, pw_exp), "WoW", JSA_GREEN) +
-        _esr_tile("Outstanding Sales", wk_out,  unit_short, acc="#f9a825") +
-        _esr_tile("YTD Exports",       wk_ytd,  unit_short, _delta(wk_ytd, py_ytd), "YoY", "#ab47bc") +
-        _esr_tile("YTD Commitment",    wk_comm, unit_short, acc="#ff7043")
-    )
-    st.markdown(
-        f'<div style="font-size:11px;color:#5a6878;margin-bottom:8px;">'
-        f'Week ending: <b style="color:#cdd9e5;">{latest_date_str}</b>'
-        f'&nbsp;·&nbsp;MY {sel_my_year}&nbsp;·&nbsp;{commodity}'
-        + (f'&nbsp;·&nbsp;<span style="color:#f9a825;">Filtered: {", ".join(sel_countries[:3])}'
-           + ("…" if len(sel_countries) > 3 else "") + "</span>"
-           if sel_countries else "") +
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div style="display:flex;gap:10px;margin-bottom:18px;">{tiles_html}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(_DIV, unsafe_allow_html=True)
-
-    # ── Weekly metric bar chart ───────────────────────────────────────────────
-    st.markdown("#### Weekly Metrics")
-    wk_totals = (
-        df.groupby("week_date")[numeric_cols].sum().reset_index()
-        .sort_values("week_date")
-    )
-
-    if wk_metrics:
-        fig_wk = go.Figure()
-        for ml in wk_metrics:
-            col_key = _ESR_METRICS[ml]
-            fig_wk.add_trace(go.Bar(
-                x=wk_totals["week_date"], y=wk_totals[col_key],
-                name=ml, marker_color=_METRIC_COLORS.get(col_key, _CH_BLUE),
-                hovertemplate=f"Wk %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra>{ml}</extra>",
-            ))
-        fig_wk.update_layout(**_ch_layout(None, None, "Week ending", unit_short, height=380,
-                                          margin=dict(l=10, r=10, t=44, b=10)))
-        fig_wk.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
-                                                          bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
-        fig_wk.update_yaxes(tickformat=",")
-        st.plotly_chart(fig_wk, use_container_width=True)
-    else:
-        st.info("Select at least one metric in Filters to show the weekly chart.")
-
-    # ── Cumulative chart with multi-MY comparison ─────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    cum_col = _ESR_METRICS.get(cum_metric_label, "ytd_exports")
-    st.markdown(f"#### Cumulative {cum_metric_label} — MY Comparison")
-
-    comp_years = [int(y) for y in comp_my_sel]
-    all_cum_years = sorted(set([sel_my_year] + comp_years), reverse=True)
-
-    fig_cum = go.Figure()
-    _CUM_PAL = _CH_PAL[1:]               # the selected year is always the lead blue; the others follow in palette order
-
-    for idx, yr in enumerate(all_cum_years):
-        if yr == sel_my_year:
-            yr_df = df.copy()
-        else:
-            with st.spinner(""):
-                yr_recs = _load_esr_exports(comm_code, yr)
-            yr_df = _parse_esr(yr_recs, yr)
-            if use_bushels and bu_factor and not yr_df.empty:
-                yr_df[numeric_cols] = yr_df[numeric_cols] * bu_factor
-            if sel_countries and not yr_df.empty:
-                yr_df = yr_df[yr_df["country"].isin(sel_countries)]
-
-        if yr_df.empty:
+def _esr_dated(mat: pd.DataFrame, code: int) -> pd.Series:
+    """One value per report Thursday. Where two marketing years share a Thursday (the report that closes the old year
+    and opens the new one) the newer year's figure is kept, as jpsi.com does."""
+    parts = []
+    for my, row in mat.iterrows():                              # oldest year first
+        row = row.dropna()
+        if row.empty:
             continue
+        first = _esr_first_thu(code, int(my))
+        parts.append(pd.Series(row.to_numpy(dtype=float), index=[first + pd.Timedelta(weeks=int(n) - 1) for n in row.index]))
+    if not parts:
+        return pd.Series(dtype=float)
+    s = pd.concat(parts)
+    return s[~s.index.duplicated(keep="last")].sort_index()
 
-        # Build cumulative: sum across countries per week, then cumsum
-        cum_wk = (
-            yr_df.groupby("week_date")[cum_col].sum()
-            .sort_index().cumsum().reset_index()
-            .rename(columns={cum_col: "cum_val"})
-        )
-        is_sel = (yr == sel_my_year)
-        color  = _CH_BLUE if is_sel else _CUM_PAL[idx % len(_CUM_PAL)]
-        fig_cum.add_trace(go.Scatter(
-            x=cum_wk["week_date"], y=cum_wk["cum_val"],
-            mode="lines", name=f"MY {yr}",
-            line=dict(color=color, width=3.4 if is_sel else 1.8),
-            hovertemplate=f"MY {yr} · %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra></extra>",
-        ))
 
-    fig_cum.update_layout(**_ch_layout(None, None, "Week ending", f"Cumulative {unit_short}", height=380,
-                                       margin=dict(l=10, r=10, t=44, b=10), hover="closest"))
-    fig_cum.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
-                                      bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
-    fig_cum.update_yaxes(tickformat=",")
-    st.plotly_chart(fig_cum, use_container_width=True)
+def _esr_compare(mat: pd.DataFrame, flow: bool, code: int, sel_my: int, wk: int, prior6: list) -> dict:
+    """The selected week of one measure against last week, the same week a year ago, the last four weeks and the
+    6-year Olympic average. A flow's 'last week' is the previous report whatever year it falls in; a balance is only
+    compared with the previous week of its own year (a new year's balances start again from nothing)."""
+    def cell(y, n):
+        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
 
-    # ── Destination charts ────────────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
+    cur = cell(sel_my, wk)
+    if flow:
+        ser = _esr_dated(mat, code)
+        d = _esr_first_thu(code, sel_my) + pd.Timedelta(weeks=wk - 1)
+        prev = ser.get(d - pd.Timedelta(weeks=1))
+        prev = None if prev is None or pd.isna(prev) else float(prev)
+        last4 = ser[(ser.index <= d) & (ser.index > d - pd.Timedelta(weeks=4))]
+        avg4 = float(last4.mean()) if len(last4) else None
+    else:
+        prev = cell(sel_my, wk - 1) if wk > 1 else None
+        vals = [v for v in (cell(sel_my, n) for n in range(max(1, wk - 3), wk + 1)) if v is not None]
+        avg4 = float(np.mean(vals)) if vals else None
+    return dict(cur=cur, prev=prev, ly=cell(sel_my - 1, wk), avg4=avg4,
+                oly=_insp_olympic(mat, prior6, wk))
 
-    dest_metric_label = st.selectbox(
-        "Destination charts — show metric",
-        ["YTD Exports", "Outstanding Sales", "Net Sales", "YTD Commitment",
-         "Gross Sales", "Weekly Exports"],
-        key="esr_dest_metric",
-        help="Which metric to rank destinations by",
-    )
-    dest_col = _ESR_METRICS.get(dest_metric_label, "ytd_exports")
 
-    # dest_col is often one of the other columns (the default is ytd_exports); pandas 3 rejects
-    # a duplicated label in the column selection, so de-duplicate it.
-    _agg_cols = list(dict.fromkeys([dest_col, "outstanding", "ytd_exports", "net_sales", "ytd_commit"]))
-    dest_agg = (
-        latest.groupby("country")[_agg_cols].sum()
-        .reset_index().sort_values(dest_col, ascending=True)
-    )
-    top_dest_df = dest_agg.tail(top_n_dest)
+def _esr_delta_line(a, b, text: str, unit: str) -> str:
+    """'▲ 12.3% vs last week'; against a base of zero or less (net sales can be negative) the change is in volume."""
+    if a is None or b is None or pd.isna(a) or pd.isna(b):
+        return f'<div class="insp-line">— {text}</div>'
+    if b > 0:
+        return _insp_delta_line((a / b - 1.0) * 100.0, text)
+    d = a - b
+    if abs(d) < 1e-12:
+        return f'<div class="insp-line">— {text}</div>'
+    col, arrow = (_INSP_POS, "▲") if d > 0 else (_INSP_NEG, "▼")
+    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(d):,.{_insp_dec(unit, d)}f} {unit}</b> {text}</div>'
 
-    col_bar, col_pie = st.columns(2)
 
-    with col_bar:
-        st.markdown(f"#### Top {top_n_dest} Destinations — {dest_metric_label}")
-        fig_dest = go.Figure(go.Bar(
-            x=top_dest_df[dest_col], y=top_dest_df["country"],
-            orientation="h",
-            marker_color=_METRIC_COLORS.get(dest_col, _CH_BLUE),
-            text=top_dest_df[dest_col].apply(lambda v: f"{v:,.{dec}f}"),
-            textposition="outside", textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False,
-            hovertemplate="%{y}: %{x:,.0f} " + unit_short + "<extra></extra>",
-        ))
-        fig_dest.update_layout(**_ch_layout(None, None, unit_short, None, legend=False, hover="closest",
-                                            height=max(320, len(top_dest_df) * 26),
-                                            margin=dict(l=10, r=50, t=36, b=10)))
-        fig_dest.update_xaxes(tickformat=",")
-        fig_dest.update_yaxes(showgrid=False, automargin=True)
-        st.plotly_chart(fig_dest, use_container_width=True)
+def _esr_summary_html(comp: dict, unit: str, pct: bool, labels: dict) -> str:
+    """The jpsi.com-style summary table: the selected week, last week, a year ago, the 4-week and 6-year averages, and
+    the change of the selected week against each, for all eight measures."""
+    cols = list(_ESR_LABEL)
+    dec = {c: _insp_dec(unit, max([abs(v) for v in comp[c].values() if v is not None] or [0.0])) for c in cols}
 
-    with col_pie:
-        st.markdown(f"#### {dest_metric_label} Share (pie)")
-        pie_df = top_dest_df[top_dest_df[dest_col] > 0]
-        if not pie_df.empty:
-            pie_df = pie_df.sort_values(dest_col, ascending=False)
-            _share = pie_df[dest_col] / pie_df[dest_col].sum() * 100
-            fig_pie = go.Figure(go.Pie(
-                labels=pie_df["country"], values=pie_df[dest_col],
-                hole=0.5, sort=False,
-                marker=dict(colors=[_CH_PAL[i % len(_CH_PAL)] for i in range(len(pie_df))],
-                            line=dict(color="#ffffff", width=2)),
-                text=[f"{s:.0f}%" if s >= 3 else "" for s in _share],          # a label only where the slice has room
-                textinfo="text", textposition="inside", insidetextorientation="horizontal",
-                textfont=dict(color="#ffffff", size=11),
-                hovertemplate="%{label}: %{value:,.0f} " + unit_short + " (%{percent})<extra></extra>",
-            ))
-            fig_pie.update_layout(**_ch_layout(None, None, legend=True, hover="closest", height=max(320, len(pie_df) * 24),
-                                               margin=dict(l=10, r=10, t=36, b=10)))
-            fig_pie.update_layout(legend=dict(orientation="v", x=1.0, y=0.5, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
-            st.plotly_chart(fig_pie, use_container_width=True)
+    def num(v, c):
+        return "—" if v is None or pd.isna(v) else f"{v:,.{dec[c]}f}"
 
-    # ── All-metrics country table ─────────────────────────────────────────────
-    st.markdown(_DIV, unsafe_allow_html=True)
-    st.markdown("#### Country Detail — Latest Week (all metrics)")
+    def chg(cur, base, c):
+        if cur is None or base is None or pd.isna(cur) or pd.isna(base):
+            return "—", ""
+        if pct:
+            if base <= 0:
+                return "—", ""
+            d = (cur / base - 1.0) * 100.0
+            text = f"{d:+,.1f}%"
+        else:
+            d = cur - base
+            text = f"{d:+,.{dec[c]}f}"
+        return text, ("pos" if d > 1e-12 else "neg" if d < -1e-12 else "")
 
-    tbl = latest[["country","net_sales","gross_sales","exports","outstanding",
-                  "ytd_exports","ytd_commit","next_sales","next_outstanding"]].copy()
-    tbl = tbl[tbl[["net_sales","exports","outstanding","ytd_exports","ytd_commit"]]
-              .abs().sum(axis=1) > 0]
-    tbl = tbl.sort_values("ytd_exports", ascending=False).reset_index(drop=True)
-    for c in ["net_sales","gross_sales","exports","outstanding",
-               "ytd_exports","ytd_commit","next_sales","next_outstanding"]:
-        tbl[c] = tbl[c].round(dec)
-    tbl.columns = [
-        "Country", "Net Sales", "Gross Sales", "Exports", "Outstanding",
-        "YTD Exports", "YTD Commitment", "New Crop Net Sales", "New Crop Outstanding",
-    ]
-    dl_col, _ = st.columns([1, 6])
-    with dl_col:
-        st.download_button(
-            "⬇ CSV", data=tbl.to_csv(index=False),
-            file_name=f"esr_{commodity}_{sel_my_year}_{latest_date_str.replace(' ','')}.csv",
-            mime="text/csv", key="dl_esr_tbl",
-        )
-    st.dataframe(tbl, use_container_width=True, height=400)
+    head = "".join(f"<th>{_ESR_LABEL[c]}</th>" for c in cols)
+    body = ""
+    for key, lab in (("cur", labels["cur"]), ("prev", "Last week"), ("ly", labels["ly"]), ("avg4", "4-week average"),
+                     ("oly", "6-yr Olympic average")):
+        cells = "".join(f"<td>{num(comp[c][key], c)}</td>" for c in cols)
+        body += f'<tr class="{"cur" if key == "cur" else ""}"><td>{lab}</td>{cells}</tr>'
+    body += '<tr class="gap"><td colspan="9"></td></tr>'
+    for key, lab in (("prev", "Change vs last week"), ("ly", "Change vs a year ago"), ("avg4", "Change vs 4-week average"),
+                     ("oly", "Change vs 6-yr Olympic avg")):
+        cells = ""
+        for c in cols:
+            text, cls = chg(comp[c]["cur"], comp[c][key], c)
+            cells += f'<td class="{cls}">{text}</td>'
+        body += f'<tr class="chg"><td>{lab}</td>{cells}</tr>'
+    return f'<div class="esr-wrap"><table class="esr-sum"><thead><tr><th></th>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
-    # ── New crop callout ──────────────────────────────────────────────────────
-    next_net = _sum(latest, "next_sales")
-    next_out = _sum(latest, "next_outstanding")
-    if abs(next_net) + abs(next_out) > 0.01:
-        st.info(
-            f"**New Crop MY {sel_my_year + 1}:** "
-            f"Net Sales {next_net:,.{dec}f} {unit_short} · "
-            f"Outstanding {next_out:,.{dec}f} {unit_short} "
-            f"as of {latest_date_str}"
-        )
+
+def _esr_fig_series(mat, flow, code, sel_my, sel_wk, last_w, rng, kind, ma, unit, name, metric, logo):
+    """Weekly series of one measure. 'Selected year': that marketing year's weeks against last year and the 6-year Olympic
+    average in the same marketing-year week. Longer ranges lay consecutive marketing years on the calendar."""
+    first = _esr_first_thu(code, sel_my)
+    my_label = _esr_my_label(code, sel_my)
+    single = rng == "Selected year"
+    if single:
+        weeks = list(range(1, last_w + 1))
+        x = [first + pd.Timedelta(weeks=n - 1) for n in weeks]
+        y = mat.loc[sel_my].reindex(weeks).to_numpy(dtype=float)
+        prior6 = [m for m in mat.index if m < sel_my][-6:]
+        ly = mat.loc[sel_my - 1].reindex(weeks) if (sel_my - 1) in mat.index else pd.Series(np.nan, index=weeks)
+        oly = [_insp_olympic(mat, prior6, n) for n in weeks]
+        label = my_label
+    else:
+        ser = _esr_dated(mat, code)
+        k = {"2 years": 2, "5 years": 5}.get(rng)
+        start = _esr_first_thu(code, sel_my - k + 1) if k else (ser.index.min() if len(ser) else first)
+        ser = ser[(ser.index >= start) & (ser.index <= first + pd.Timedelta(weeks=last_w - 1))]
+        x, y, weeks, label = list(ser.index), ser.to_numpy(dtype=float), None, f"{name} {metric.lower()}"
+    finite = y[np.isfinite(y)] if len(y) else y
+    dec = _insp_dec(unit, float(np.abs(finite).max()) if len(finite) else 0.0)
+    hov = (lambda nm: f"Wk %{{customdata}}: %{{y:,.{dec}f}} {unit}<extra>{nm}</extra>") if single else \
+          (lambda nm: f"%{{x|%b %d, %Y}}: %{{y:,.{dec}f}} {unit}<extra>{nm}</extra>")
+    fig = go.Figure()
+    if kind == "Bars":
+        picked = "#3b7fa3"
+        colors = [_INSP_NEG if (np.isfinite(v) and v < 0) else (picked if (single and weeks[i] == sel_wk) else _INSP_BLUE)
+                  for i, v in enumerate(y)]
+        fig.add_trace(go.Bar(x=x, y=np.nan_to_num(y), marker_color=colors, showlegend=False, name=label, customdata=weeks,
+                             hovertemplate=hov(label)))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", marker=dict(symbol="square", size=11, color=_INSP_BLUE),
+                                 name=label))                    # a bar trace of mixed colours would lend its legend the first bar's
+    else:
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name=label, customdata=weeks, line=dict(color=_INSP_BLUE, width=2.8),
+                                 hovertemplate=hov(label)))
+    if single:
+        fig.add_trace(go.Scatter(x=x, y=ly, mode="lines", name="Year ago", customdata=weeks,
+                                 line=dict(color=_INSP_TERRA, width=1.8), hovertemplate=hov("Year ago")))
+        fig.add_trace(go.Scatter(x=x, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
+                                 line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
+    if ma and len(y):
+        smooth = pd.Series(y).rolling(4, min_periods=1).mean().to_numpy()
+        fig.add_trace(go.Scatter(x=x, y=smooth, mode="lines", name="4-week average", customdata=weeks,
+                                 line=dict(color=_INSP_LAV, width=2.6), hovertemplate=hov("4-week average")))
+    if single and sel_wk < last_w:
+        xs = x[sel_wk - 1].strftime("%Y-%m-%d")
+        fig.add_shape(type="line", x0=xs, x1=xs, y0=0, y1=1, xref="x", yref="paper", line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    if single:
+        title = f"{name} {metric.lower()}, {my_label} ({unit})"
+        sub = "Weekly, week ending Thursday. Year ago and the 6-year Olympic average are the same marketing-year week."
+    else:
+        title = f"{name} {metric.lower()} ({unit})"
+        sub = (f"Weekly, {x[0]:%b %d, %Y} to {x[-1]:%b %d, %Y}. On the Thursday a marketing year turns over, the new year's figure is shown."
+               if len(x) else "No weeks in this range.")
+    _insp_style(fig, 400, title, sub, logo=logo, y_title=unit)
+    if single and last_w <= 14:                                 # early in a marketing year: a tick for every week
+        fig.update_xaxes(tickformat="%b %d", dtick=7 * 86_400_000, tickmode="linear", tick0=x[0].strftime("%Y-%m-%d"),
+                         hoverformat="%b %d, %Y")
+    elif single:
+        fig.update_xaxes(tickformat="%b %y", dtick="M1", hoverformat="%b %d, %Y")
+    else:
+        fig.update_xaxes(tickformat="%b %Y", dtick={"2 years": "M3", "5 years": "M6"}.get(rng, "M12"), hoverformat="%b %d, %Y")
+    fig.update_yaxes(tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    return fig
+
+
+def _esr_fig_season(mat, flow, code, sel_my, sel_wk, last_w, years_mode, cumulative, smooth, unit, name, metric, logo):
+    """One line per marketing year over the marketing-year weeks: the selected year in blue, the year before it terracotta,
+    older years in sage shades (darker = more recent), plus the 6-year Olympic average."""
+    cum = flow and cumulative
+    M = mat.fillna(0.0).cumsum(axis=1).where(mat.notna()) if cum else mat
+    prior = [y for y in M.index if y < sel_my]
+    pick = (prior[-10:] if years_mode == "10 prior years" else prior[-5:]) + [sel_my]
+    prior6 = prior[-6:]
+    weeks = list(M.columns)
+    sm = flow and smooth and not cum
+    older = sorted(y for y in pick if y not in (sel_my, sel_my - 1))
+    finite = M.loc[sel_my].dropna().to_numpy(dtype=float)
+    dec = _insp_dec(unit, float(np.abs(finite).max()) if len(finite) else 0.0)
+    fig = go.Figure()
+    for y in sorted(pick):
+        row = M.loc[y].dropna()
+        if sm:
+            row = row.rolling(4, min_periods=1).mean()
+        lbl = _esr_my_label(code, y)
+        if y == sel_my:
+            style, mode = dict(color=_INSP_BLUE, width=3.6), "lines+markers" if len(row) <= 12 else "lines"
+        elif y == sel_my - 1:
+            style, mode = dict(color=_INSP_TERRA, width=2.2), "lines"
+        else:
+            style, mode = dict(color=_ch_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3), "lines"
+        if len(row) <= 2 and mode == "lines":
+            mode = "lines+markers"                              # a year with one or two weeks in is otherwise invisible
+        fig.add_trace(go.Scatter(x=row.index, y=row.to_numpy(), mode=mode, name=lbl, line=style, marker=dict(size=6),
+                                 hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>{lbl}</extra>"))
+    oly = [_insp_olympic(M, prior6, n) for n in weeks]
+    if sm:
+        oly = pd.Series(oly, dtype="float").rolling(4, min_periods=1).mean().tolist()
+    fig.add_trace(go.Scatter(x=weeks, y=oly, mode="lines", name="6-yr Olympic avg", line=dict(color=_INSP_SAGE, width=2.2, dash="dash"),
+                             hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>6-yr Olympic avg</extra>"))
+    if sel_wk < last_w:
+        fig.add_shape(type="line", x0=sel_wk, x1=sel_wk, y0=0, y1=1, xref="x", yref="paper", line=dict(color=_INSP_SAGE, width=1, dash="dot"))
+    vals, text = _insp_month_ticks(_esr_first_thu(code, sel_my), len(weeks))
+    word = "cumulative " if cum else ("weekly (4-week average) " if sm else "")
+    _insp_style(fig, 420, f"{name} {word}{metric.lower()} by marketing-year week ({unit})",
+                f"Marketing years overlaid; months on the axis follow {_esr_my_label(code, sel_my)}.", logo=logo,
+                x_title="Marketing-year week", y_title=f"Cumulative {unit}" if cum else unit)
+    fig.update_xaxes(tickmode="array", tickvals=vals, ticktext=[f"{t}" for t in text], range=[0.5, len(weeks) + 0.5])
+    fig.update_yaxes(tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    return fig
+
+
+def _esr_fig_dest(vals: pd.Series, top_n: int, unit: str, title: str, subtitle: str, logo=None):
+    """Horizontal bars of one measure by destination: the `top_n` largest by size, positives on top. A net cancellation
+    (negative) is drawn red, to the left of zero."""
+    v = vals[vals.abs() > 1e-12]
+    if v.empty:
+        return None
+    top = v.reindex(v.abs().sort_values(ascending=False).index).head(top_n).sort_values()
+    order = list(top.index)
+    dec = _insp_dec(unit, float(top.abs().max()))
+    fig = go.Figure(go.Bar(x=top.to_numpy(), y=order, orientation="h", name="Volume",
+                           marker_color=[_INSP_NEG if t < 0 else _INSP_BLUE for t in top.to_numpy()],
+                           hovertemplate=f"%{{y}}: %{{x:,.{dec}f}} {unit}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[max(t, 0.0) for t in top.to_numpy()], y=order, mode="text", text=[_insp_fmt(t, unit) for t in top.to_numpy()],
+                             textposition="middle right", textfont=dict(size=11, color=_INSP_MUTED), showlegend=False,
+                             hoverinfo="skip", cliponaxis=False))
+    _insp_style(fig, max(300, 27 * len(order) + 110), title, subtitle, legend=False, hover="closest", logo=logo, x_title=unit)
+    lo, hi = float(top.min()), float(top.max())
+    fig.update_xaxes(range=[min(0.0, lo * 1.25), max(0.0, hi * 1.2)], tickformat=",", zeroline=True, zerolinecolor=_INSP_BORDER)
+    fig.update_yaxes(showgrid=False, automargin=True)
+    return fig
+
+
+def _esr_render(use_bushels: bool) -> None:
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    logo = _load_logo_b64(LOGO_50YR_PATH)
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        st.error(f"**The USDA export-sales service could not be reached.** `{e}` Click **Refresh Data** above to try again.")
+        return
+
+    # ── filters: always on show, and they apply to the tiles, the table and every chart ──────────────────────────────
+    with st.container(border=True, key="esr_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="esr_reset", on_click=_fp_reset, args=(_ESR_RESET_KEYS,))
+        _fp_group("What to show")
+        c_com, c_my, c_wk, c_met = st.columns([1.15, 1.0, 2.7, 1.6])
+        commodity = c_com.selectbox("Commodity", list(_ESR_COMMODITIES), key="esr_comm")
+        code, _month, lb = _ESR_COMMODITIES[commodity]
+        cur_my = cat["current"].get(code)
+        if cur_my is None:
+            st.error(f"USDA lists no current marketing year for {commodity.lower()}.")
+            return
+        try:
+            with st.spinner(f"Loading {commodity.lower()} export sales…"):
+                df, failed = _esr_history(code, cur_my)
+        except Exception as e:
+            st.error(f"**The {commodity.lower()} export sales could not be read.** `{e}` Click **Refresh Data** above to try again.")
+            return
+        if df.empty:
+            st.info(f"No {commodity.lower()} export sales are on file yet.")
+            return
+        df = _esr_named(df, cat)
+        years = sorted((int(y) for y in df["my"].unique()), reverse=True)
+        my_name = {y: _esr_my_label(code, y) for y in years}
+        picked = c_my.selectbox("Marketing year", [my_name[y] for y in years], key=f"esr_my_{code}")
+        sel_my = next(y for y in years if my_name[y] == picked)
+        my_label = my_name[sel_my]
+        last_w = int(df.loc[df["my"] == sel_my, "wk"].max())
+        first_thu = _esr_first_thu(code, sel_my)
+
+        def week_end(n) -> pd.Timestamp:
+            return first_thu + pd.Timedelta(weeks=int(n) - 1)
+
+        with c_wk:
+            if last_w > 1:
+                sel_week = int(st.select_slider("Week (ending Thursday)", options=list(range(1, last_w + 1)), value=last_w,
+                                                format_func=lambda n: f"Wk {n} · {week_end(n):%b %d}",
+                                                key=f"esr_week_{code}_{sel_my}"))
+            else:
+                sel_week = 1                                    # a slider needs two positions: only one week is in so far
+                st.caption(f"Week 1 · {week_end(1):%b %d}: the only week reported so far in {my_label}.")
+        metric = c_met.selectbox("Data type", list(_ESR_METRICS), key="esr_metric")
+        col, flow = _ESR_METRICS[metric]
+
+        _fp_group("Narrow it down")
+        ref = df[(df["my"] == sel_my) & (df["wk"] == last_w)]
+        by_reg = ref.groupby("region")["commit"].sum().sort_values(ascending=False)
+        by_dst = ref.groupby("country")["commit"].sum().sort_values(ascending=False)
+        reg_opts = list(by_reg.index) + sorted(set(df["region"]) - set(by_reg.index))
+        dst_opts = list(by_dst.index) + sorted(set(df["country"]) - set(by_dst.index))
+        f1, f2 = st.columns([1.3, 2.7])
+        sel_reg = f1.multiselect("Region", _keep_selected(reg_opts, f"esr_reg_{code}"), key=f"esr_reg_{code}", placeholder="All regions")
+        sel_dst = f2.multiselect("Destination", _keep_selected(dst_opts, f"esr_dst_{code}"), key=f"esr_dst_{code}",
+                                 placeholder="All destinations")
+        chips = []
+        if sel_reg:
+            chips.append("Region: " + ", ".join(sel_reg))
+        if sel_dst:
+            chips.append("Destination: " + ", ".join(sel_dst[:4]) + (f" +{len(sel_dst) - 4} more" if len(sel_dst) > 4 else ""))
+        st.markdown(_fp_chips(chips, "No narrowing: every destination is counted"), unsafe_allow_html=True)
+
+    mask = pd.Series(True, index=df.index)
+    if sel_reg:
+        mask &= df["region"].isin(sel_reg)
+    if sel_dst:
+        mask &= df["country"].isin(sel_dst)
+    dff = df[mask]
+    if dff.empty:
+        st.info("No destination matches these filters.")
+        return
+
+    bu_ok = use_bushels and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    sc = (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3          # metric tons -> Mbu or TMT
+    name = _ESR_TITLE.get(commodity, commodity)
+
+    notes = [f"Data through the week ending {df['week'].max():%a %b %d, %Y}. USDA publishes on Thursdays at 8:30 a.m. ET, "
+             f"for the week that ended the Thursday before."]
+    if use_bushels and lb is None:
+        notes.append(f"USDA defines no bushel weight for {commodity.lower()}, so it stays in TMT.")
+    if code in (1701, 1702):
+        notes.append("Fresh, chilled or frozen muscle cuts; the marketing year is the calendar year.")
+    if failed:
+        notes.append("Marketing year(s) " + ", ".join(_esr_my_label(code, y) for y in failed) +
+                     " could not be read just now and are left out; Refresh Data tries again.")
+    st.markdown(
+        f'<div style="margin:14px 0 4px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">'
+        f'United States {name} Export Sales</span>'
+        f'<span style="font-size:17px;font-weight:600;color:#6b7280;">({unit})</span></div>',
+        unsafe_allow_html=True)
+    st.caption(" ".join(notes))
+
+    # ── pace numbers ──────────────────────────────────────────────────────────
+    T = {c: m * sc for c, m in _esr_matrices(df, dff).items()}
+    prior6 = [y for y in T["net"].index if y < sel_my][-6:]
+    comp = {c: _esr_compare(T[c], _ESR_FLOW[c], code, sel_my, sel_week, prior6) for c in T}
+
+    tiles = []
+    for c, lab in (("net", f"Net sales · week {sel_week}"), ("exp", "Weekly exports"), ("out", "Outstanding sales"),
+                   ("acc", "Exports to date"), ("commit", "Total commitments"), ("nxt_out", "Next-MY outstanding")):
+        k = comp[c]
+        tiles.append(_insp_tile(lab, _insp_fmt(k["cur"], unit), unit,
+                                [_esr_delta_line(k["cur"], k["prev"], "vs last week", unit),
+                                 _esr_delta_line(k["cur"], k["ly"], "vs a year ago", unit),
+                                 _esr_delta_line(k["cur"], k["oly"], "vs 6-yr Olympic avg", unit)]))
+    for cell_col, html_ in zip(st.columns(6), tiles):
+        cell_col.markdown(html_, unsafe_allow_html=True)
+
+    # ── summary table ─────────────────────────────────────────────────────────
+    _insp_sec("Summary")
+    ly_end = _esr_first_thu(code, sel_my - 1) + pd.Timedelta(weeks=sel_week - 1) if (sel_my - 1) in T["net"].index else None
+    labels = {"cur": f"Week {sel_week} · {week_end(sel_week):%b %d, %Y}",
+              "ly": f"A year ago · {ly_end:%b %d, %Y}" if ly_end is not None else "A year ago"}
+    p1, _ = st.columns([1.4, 4.6])
+    as_pct = p1.toggle("Show changes as %", key="esr_pct")
+    st.markdown(_esr_summary_html(comp, unit, as_pct, labels), unsafe_allow_html=True)
+    st.markdown(f'<div class="insp-note">All figures in {unit}. A year ago and the 6-yr Olympic average are the same marketing-year week. '
+                f'Sales and exports compare with the previous report; balances (accumulated exports, outstanding sales, commitments) '
+                f'with the previous week of the same marketing year, and the 4-week average of a balance is taken within it.</div>',
+                unsafe_allow_html=True)
+
+    # ── weekly pace ───────────────────────────────────────────────────────────
+    _insp_sec("Weekly pace")
+    r1, r2, r3, _ = st.columns([2.4, 1.4, 1.4, 2.0])
+    rng = r1.segmented_control("Range", ["Selected year", "2 years", "5 years", "All loaded"], default="Selected year",
+                               key="esr_range") or "Selected year"
+    kind = r2.segmented_control("Chart", ["Bars", "Line"], default="Bars", key="esr_kind") or "Bars"
+    ma = r3.toggle("4-week average", key="esr_ma", help="Smooths the weekly series; sales and exports swing with vessel timing.")
+    _insp_plot(_esr_fig_series(T[col], flow, code, sel_my, sel_week, last_w, rng, kind, ma, unit, name, metric, logo), "esr_fig_series")
+
+    _insp_sec("Marketing-year pace")
+    s1, s2, s3, _ = st.columns([2.0, 1.3, 1.5, 2.4])
+    years_mode = s1.segmented_control("Compare with", ["5 prior years", "10 prior years"], default="5 prior years",
+                                      key="esr_years") or "5 prior years"
+    cumulative = smooth = False
+    if flow:
+        cumulative = s2.toggle("Cumulative", key="esr_cum", help="Adds each week to the ones before it: the marketing year to date.")
+        if not cumulative:
+            smooth = s3.toggle("4-week average", key="esr_smooth")
+    else:
+        s2.caption("A balance: shown as it stood each week.")
+    _insp_plot(_esr_fig_season(T[col], flow, code, sel_my, sel_week, last_w, years_mode, cumulative, smooth, unit, name, metric, logo),
+               "esr_fig_season")
+
+    # ── where it is going ─────────────────────────────────────────────────────
+    _insp_sec("Where it is going")
+    cur_f = dff[dff["my"] == sel_my]
+    d1, d2, _ = st.columns([2.4, 1.8, 2.2])
+    to_date = False
+    if flow:
+        to_date = (d1.segmented_control("Period", ["This week", "Marketing year to date"], default="This week",
+                                        key="esr_period") or "This week") != "This week"
+    else:
+        d1.caption(f"A balance: shown as it stood at the end of week {sel_week}.")
+    top_n = d2.slider("Destinations shown", 5, 30, 12, key="esr_topn")
+    rows = cur_f[cur_f["wk"] <= sel_week] if to_date else cur_f[cur_f["wk"] == sel_week]
+    vals = rows.groupby("country")[col].sum() * sc
+    when = (f"{my_label} to date · through week {sel_week} ({week_end(sel_week):%b %d, %Y})" if to_date
+            else f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}")
+    if vals.abs().sum() <= 1e-12:
+        st.info(f"No destination has {metric.lower()} to show for this period and these filters.")
+    else:
+        cl, cr = st.columns([3, 2])
+        with cl:
+            fig = _esr_fig_dest(vals, top_n, unit, f"{metric} by destination ({unit})", when, logo=logo)
+            if fig is not None:
+                _insp_plot(fig, "esr_fig_dest")
+        with cr:
+            pos = vals[vals > 1e-12]
+            fig = _insp_fig_donut(pd.DataFrame({"dest": pos.index, "v": pos.to_numpy()}), "dest", unit, "Share by destination",
+                                  when + (" · net cancellations left out" if (vals < -1e-12).any() else ""), top_n=7, min_label=3)
+            if fig is not None:
+                _insp_plot(fig, "esr_fig_share")
+
+    # ── detail ────────────────────────────────────────────────────────────────
+    _insp_sec("Detail by destination")
+    num_cols = list(_ESR_FIELDS.values())
+    wk_rows = cur_f[cur_f["wk"] == sel_week]
+    tbl = wk_rows.groupby("country")[num_cols].sum() * sc
+    ly_commit = dff[(dff["my"] == sel_my - 1) & (dff["wk"] == sel_week)].groupby("country")["commit"].sum() * sc
+    tbl = tbl.reindex(tbl.index.union(ly_commit[ly_commit.abs() > 1e-12].index)).fillna(0.0)
+    tbl = tbl[(tbl[num_cols].abs() > 1e-12).any(axis=1)].sort_values("commit", ascending=False)
+    ly_c = ly_commit.reindex(tbl.index).fillna(0.0)
+    tbl["vs"] = np.where(ly_c > 0, (tbl["commit"] / ly_c.where(ly_c > 0) - 1.0) * 100.0, np.nan)
+    tot = tbl["commit"].sum()
+    tbl["share"] = tbl["commit"] / tot * 100.0 if tot > 0 else np.nan
+    tbl.index.name = "Destination"
+    nice = {c: f"{_ESR_LABEL[c].replace(' (next MY)', ', next MY')} ({unit})" for c in num_cols}
+    nice.update({"vs": "Commitments vs a year ago", "share": "Share of commitments"})
+    tbl = tbl.rename(columns=nice)
+    st.download_button("Download CSV", data=tbl.round(4).to_csv(),
+                       file_name=f"us_{commodity.lower().replace(' ', '_')}_export_sales_{my_label.replace('/', '-')}_wk{sel_week}.csv",
+                       mime="text/csv", key="esr_dl")
+    vf = "{:,.1f}" if unit == "TMT" else "{:,.2f}"
+    show = tbl.head(80).copy()
+    show["Commitments vs a year ago"] = show["Commitments vs a year ago"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
+    fmt = {nice[c]: vf for c in num_cols}
+    fmt["Share of commitments"] = "{:.1f}%"
+    _insp_table(show.style.format(fmt, na_rep="—"), 420)
+
+    st.markdown(
+        '<div class="insp-note">Source: USDA Foreign Agricultural Service, Export Sales Reporting (ESR), by week ending Thursday; '
+        'the same weekly report as jpsi.com/export-sales-dashboard. <b>Net sales</b> are new sales less cancellations and can be negative; '
+        '<b>outstanding sales</b> are sold and not yet shipped; <b>total commitments</b> are accumulated exports plus outstanding sales; '
+        '<b>next MY</b> counts sales for the following marketing year. The first report of a marketing year covers only the days since it '
+        'began, so its weekly exports run short. Sales are reported by exporters on contract date and are revised later. '
+        '"6-yr Olympic avg" drops the highest and lowest of the six prior marketing years, as elsewhere in this dashboard.</div>',
+        unsafe_allow_html=True)
+
+
+@st.fragment
+def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
+    """Export sales tab. A fragment, so its filters rerun only this tab, not all ten. The unit comes from the global
+    toggle through `use_bushels`; `unit_short` is kept for the caller's sake."""
+    try:
+        _esr_render(use_bushels)
+    except Exception as e:
+        st.error(f"Export Sales tab error: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
