@@ -151,6 +151,7 @@ _CHART_CONFIG = {
 _orig_plotly_chart = st.plotly_chart
 def _patched_plotly_chart(fig, **kw):
     kw.setdefault("config", _CHART_CONFIG)
+    kw.setdefault("theme", None)        # the figures style themselves; Streamlit's theme would overrule their fonts and legend colours
     return _orig_plotly_chart(fig, **kw)
 st.plotly_chart = _patched_plotly_chart
 
@@ -162,6 +163,44 @@ JSA_CYAN  = "#0693e3"
 JSA_DARK  = "#1e2124"
 JSA_CHAR  = "#32373c"
 JSA_MID   = "#2a2f35"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHART THEME — the light sage palette of the CFTC COT dashboard, shared by every chart
+# ─────────────────────────────────────────────────────────────────────────────
+_CH_SURF, _CH_BORDER, _CH_TEXT, _CH_MUTED = "#ffffff", "#d7e2dc", "#32373c", "#5f7267"
+_CH_SAGE, _CH_BLUE, _CH_TERRA, _CH_LAV, _CH_GOLD, _CH_MIST = "#5e7164", "#6fa8c4", "#c4785a", "#9b89c4", "#c4b456", "#b8c4bc"
+_CH_POS, _CH_NEG = "#16a34a", "#dc2626"                          # above / below a reference
+_CH_EST, _CH_M1, _CH_M2 = "#d9822b", "#c8920d", "#16a34a"        # estimate segment, Model 1 (USDA seasonal), Model 2 (pace)
+_CH_PAL = [_CH_BLUE, _CH_TERRA, _CH_SAGE, _CH_LAV, _CH_GOLD, "#8fa398", "#c0707f", "#5aa59a", "#7b8fb5", "#9c7a62", "#8c9a52", _CH_MIST]
+_CH_FONT = '"Source Sans", "Source Sans Pro", sans-serif'
+_CH_COUNTRY = {                                                   # one colour per country in every comparison chart
+    "US": _CH_TERRA, "Brazil": _CH_SAGE, "Argentina": _CH_BLUE, "Ukraine": _CH_GOLD, "TotalNonUS": _CH_LAV,
+    "MajorExporter": "#9c7a62", "ChinaImports": "#b5586b", "Canada": "#c0707f", "EU": "#4a7ba6", "Russia": "#7b8fb5",
+    "India": "#d9904a", "China": "#a8505a", "Australia": "#5aa59a",
+}
+_CH_AXIS = dict(gridcolor=_CH_BORDER, linecolor=_CH_BORDER, showgrid=True, zeroline=False,
+                tickfont=dict(color=_CH_MUTED, size=11), title_font=dict(color=_CH_MUTED, size=11))
+
+
+def _ch_axis(title: str | None = None) -> dict:
+    """An axis in the shared style. The title goes in as a dict: a plain string would replace the title font set above."""
+    ax = dict(_CH_AXIS)
+    ax.pop("title_font")
+    if title:
+        ax["title"] = dict(text=title, font=dict(color=_CH_MUTED, size=11))
+    return ax
+
+
+def _ch_mix(c1: str, c2: str, t: float) -> str:
+    """The colour a fraction t of the way from c1 to c2 (both '#rrggbb')."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(a[j] + (b[j] - a[j]) * t):02x}" for j in range(3))
+
+
+def _ch_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MONTH LISTS
@@ -220,14 +259,7 @@ COMMODITY_CONFIG = {
             "TotalNonUS":    "#7e57c2",
             "MajorExporter": "#ef5350",
         },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#1b7e35",
-            "Argentina":     "#4fc3f7",
-            "Ukraine":       "#fdd835",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-        },
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 56.0,   # lbs per bushel of corn
     },
     "soybeans": {
@@ -266,14 +298,7 @@ COMMODITY_CONFIG = {
             "MajorExporter": "#ef5350",
             "ChinaImports":  "#e53935",
         },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#1b7e35",
-            "Argentina":     "#4fc3f7",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-            "ChinaImports":  "#e53935",
-        },
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of soybeans
     },
     "soybeanmeal": {
@@ -310,13 +335,7 @@ COMMODITY_CONFIG = {
             "TotalNonUS":    "#8d6e63",
             "MajorExporter": "#ef6c00",
         },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Brazil":        "#43a047",
-            "Argentina":     "#4fc3f7",
-            "TotalNonUS":    "#8d6e63",
-            "MajorExporter": "#ef6c00",
-        },
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs":  None,   # meal is not measured in bushels
     },
     "wheat": {
@@ -425,20 +444,7 @@ COMMODITY_CONFIG = {
             "TotalNonUS":    "#7e57c2",
             "MajorExporter": "#ef6c00",
         },
-        "country_colors": {
-            "US":            "#f9a825",
-            "Canada":        "#ef5350",
-            "EU":            "#1565c0",
-            "Russia":        "#78909c",
-            "Ukraine":       "#fdd835",
-            "India":         "#ff6d00",
-            "China":         "#b71c1c",
-            "Argentina":     "#4fc3f7",
-            "Australia":     "#4db6ac",
-            "Brazil":        "#43a047",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef6c00",
-        },
+        "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of wheat
     },
 }
@@ -490,14 +496,20 @@ def _load_logo_b64(path: str, _mtime: float = 0) -> str | None:
         return None
 
 
-def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
-    if logo_b64 is None:
+@st.cache_data(show_spinner=False)
+def _ch_watermark_uri() -> str | None:
+    return _load_logo_b64(LOGO_50YR_PATH)
+
+
+def _add_chart_watermark(fig: go.Figure, logo_b64: str | None = None) -> go.Figure:
+    """The faint 50-year mark behind a chart. logo_b64 is accepted for the older call sites and ignored: the white
+    logo they pass disappears on a light chart."""
+    uri = _ch_watermark_uri()
+    if uri is None:
         return fig
     fig.add_layout_image(dict(
-        source=logo_b64, xref="paper", yref="paper",
-        x=0.5, y=0.5, sizex=0.30, sizey=0.30,
-        xanchor="center", yanchor="middle",
-        opacity=0.10, layer="above",
+        source=uri, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.42, sizey=0.42,
+        xanchor="center", yanchor="middle", sizing="contain", opacity=0.09, layer="below",
     ))
     return fig
 
@@ -1363,22 +1375,22 @@ _TABLE_CSS = """
 
 /* ── Vessel Lineup tab ── */
 .vl-kpi-wrap {
-    background: #141c18; border: 1px solid #253328;
-    border-radius: 8px; padding: 14px 18px; margin-bottom: 6px;
+    background: #ffffff; border: 1px solid #d7e2dc;
+    border-radius: 10px; padding: 14px 18px; margin-bottom: 6px;
 }
 .vl-kpi-label {
-    font-size: 10px; font-weight: 600; color: #7a9485;
+    font-size: 10px; font-weight: 600; color: #5f7267;
     text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px;
 }
 .vl-kpi-value {
-    font-size: 26px; font-weight: 700; color: #e8ede9;
+    font-size: 26px; font-weight: 700; color: #32373c;
     line-height: 1.1; margin: 0;
 }
-.vl-kpi-sub { font-size: 11px; color: #7a9485; margin-top: 2px; }
+.vl-kpi-sub { font-size: 11px; color: #5f7267; margin-top: 2px; }
 .vl-sec-hdr {
-    font-size: 11px; font-weight: 700; color: #7a9485;
+    font-size: 11px; font-weight: 700; color: #5f7267;
     text-transform: uppercase; letter-spacing: 0.09em;
-    border-bottom: 1px solid #253328; padding-bottom: 6px; margin: 22px 0 14px 0;
+    border-bottom: 1px solid #d7e2dc; padding-bottom: 6px; margin: 22px 0 14px 0;
 }
 </style>
 """
@@ -1578,36 +1590,50 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
 # ─────────────────────────────────────────────────────────────────────────────
 # CHARTS
 # ─────────────────────────────────────────────────────────────────────────────
+def _ch_title(title: str, subtitle: str | None = None) -> dict:
+    """A left-aligned chart title (with an optional muted second line), pinned 14 px below the top edge."""
+    text = f"<b>{title}</b>" + (f"<br><span style='font-size:12px;color:{_CH_MUTED}'>{subtitle}</span>" if subtitle else "")
+    return dict(text=text, x=0, xanchor="left", y=1, yanchor="top", pad=dict(t=14), font=dict(size=15, color=_CH_TEXT))
+
+
+def _ch_layout(title: str | None = None, subtitle: str | None = None, x_title: str | None = None,
+               y_title: str | None = None, height: int | None = None, legend: bool = True,
+               hover: str = "x unified", margin: dict | None = None) -> dict:
+    """Layout for the light COT look: white surface, sage gridlines, muted tick text. Every chart starts from this."""
+    lay = dict(
+        template="plotly_white", paper_bgcolor=_CH_SURF, plot_bgcolor=_CH_SURF,
+        font=dict(family=_CH_FONT, color=_CH_TEXT, size=12), hovermode=hover,
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor=_CH_BORDER, font=dict(color=_CH_TEXT, size=12)),
+        showlegend=legend,
+        legend=dict(bgcolor="rgba(255,255,255,0.92)", bordercolor=_CH_BORDER, borderwidth=1,
+                    font=dict(size=11, color=_CH_MUTED)),
+        margin=margin or dict(l=70, r=20, t=(88 if subtitle else 64) if title else 24, b=60),
+        xaxis=_ch_axis(x_title), yaxis=_ch_axis(y_title),
+    )
+    if title:
+        lay["title"] = _ch_title(title, subtitle)
+    if height:
+        lay["height"] = height
+    return lay
+
+
 def _base_layout(title_text, x_title, y_title) -> dict:
-    axis = dict(
-        gridcolor="#484f56", linecolor="#484f56",
-        tickcolor="#aaaaaa", tickfont=dict(color="#cccccc"),
-        title_font=dict(color="#ffffff"), zerolinecolor="#484f56",
-    )
-    return dict(
-        title=dict(text=title_text, font=dict(color="#ffffff", size=15, family="Arial")),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#32373c",
-        font=dict(family="Arial", color="#ffffff", size=12),
-        legend=dict(bgcolor="rgba(30,33,36,0.92)", bordercolor="#484f56",
-                    borderwidth=1, font=dict(size=11)),
-        margin=dict(l=70, r=20, t=55, b=60),
-        hovermode="x unified",
-        xaxis=dict(**axis, title=x_title),
-        yaxis=dict(**axis, title=y_title, tickformat=","),
-    )
+    lay = _ch_layout(title_text, None, x_title, y_title)
+    lay["yaxis"]["tickformat"] = ","
+    return lay
 
 
 def _year_style(year, cy, ly, all_years) -> tuple:
+    """(colour, width, opacity) of a marketing-year line: this year blue, last year terracotta, earlier years in sage
+    shades that darken toward the present."""
     if year == cy:
-        return "#0693e3", 4.5, 1.0
+        return _CH_BLUE, 4.5, 1.0
     if year == ly:
-        return "#ffffff", 3.0, 0.92
+        return _CH_TERRA, 3.0, 1.0
     other = [y for y in all_years if y != cy and y != ly]
     idx   = other.index(year) if year in other else 0
-    n     = max(len(other) - 1, 1)
-    t     = idx / n
-    return (f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})",
-            round(1.0 + 0.4 * t, 1), round(0.18 + 0.45 * t, 2))
+    t     = idx / max(len(other) - 1, 1)
+    return _ch_mix("#cdd9d1", "#5f7267", t), round(1.0 + 0.6 * t, 1), 1.0
 
 
 def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
@@ -1646,7 +1672,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 band_lower.append(None)
         fig.add_trace(go.Scatter(
             x=months + months[::-1], y=band_upper + band_lower[::-1],
-            fill="toself", fillcolor="rgba(6,147,227,0.10)",
+            fill="toself", fillcolor=_ch_rgba(_CH_SAGE, 0.12),
             line=dict(color="rgba(0,0,0,0)"),
             name=f"±1 Std Dev ({len(hist_8)} yr)",
             hoverinfo="skip", showlegend=True,
@@ -1663,8 +1689,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         fig.add_trace(go.Scatter(
             x=months, y=oly_vals, mode="lines+markers",
             name="6-Yr Olympic Avg",
-            line=dict(color="#0693e3", width=2.5, dash="dash"),
-            marker=dict(symbol="diamond", size=6, color="#0693e3"),
+            line=dict(color=_CH_SAGE, width=2.5, dash="dash"),
+            marker=dict(symbol="diamond", size=6, color=_CH_SAGE),
             legendrank=800,
             customdata=oly_hover,
             hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
@@ -1726,8 +1752,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=est_months_seq, y=est_vals,
                     mode="lines+markers", name=f"{cy} (Estimate)",
-                    line=dict(color="#f9a825", width=width, dash="dash"),
-                    marker=dict(size=5, color="#f9a825", symbol="diamond"),
+                    line=dict(color=_CH_EST, width=width, dash="dash"),
+                    marker=dict(size=5, color=_CH_EST, symbol="diamond"),
                     opacity=opacity, connectgaps=False,
                     legendrank=2,
                     customdata=est_hover,
@@ -1741,13 +1767,13 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                     x0=months[boundary], x1=months[boundary],
                     y0=0, y1=1,
                     xref="x", yref="paper",
-                    line=dict(color="#f9a825", width=1, dash="dot"),
+                    line=dict(color=_CH_EST, width=1, dash="dot"),
                 )
                 fig.add_annotation(
                     x=months[boundary], y=1.02,
                     xref="x", yref="paper",
                     text="Est →",
-                    font=dict(color="#f9a825", size=10),
+                    font=dict(color=_CH_EST, size=10),
                     showarrow=False,
                     xanchor="left", yanchor="bottom",
                 )
@@ -1772,8 +1798,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=months, y=vals, mode="lines+markers", name=year,
                 line=dict(color=color, width=width),
-                marker=dict(size=5 if is_key else 3, color=color,
-                            line=dict(width=1.2, color="#32373c") if year == ly else None),
+                marker=dict(size=5 if is_key else 3, color=color),
                 opacity=opacity, connectgaps=False,
                 legendrank=legend_rank.get(year, 500),
                 customdata=yr_hover,
@@ -1813,7 +1838,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=band_x + band_x[::-1],
                     y=band_hi + band_lo[::-1],
-                    fill="toself", fillcolor="rgba(255,193,7,0.18)",
+                    fill="toself", fillcolor=_ch_rgba(_CH_M1, 0.16),
                     line=dict(color="rgba(0,0,0,0)"),
                     name="Forecast ±0.5σ",
                     hoverinfo="skip", showlegend=True, legendrank=950,
@@ -1832,9 +1857,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=m1_x, y=m1_y, mode="lines+markers",
                 name="Forecast — USDA Seasonal",
-                line=dict(color="#fdd835", width=2.5, dash="dot"),
-                marker=dict(symbol="diamond-open", size=7, color="#fdd835",
-                            line=dict(width=2, color="#fdd835")),
+                line=dict(color=_CH_M1, width=2.5, dash="dot"),
+                marker=dict(symbol="diamond-open", size=7, color=_CH_M1,
+                            line=dict(width=2, color=_CH_M1)),
                 connectgaps=True, legendrank=5,
                 customdata=m1_hover,
                 hovertemplate="%{x}: %{customdata}<extra>USDA Seasonal Fcst</extra>",
@@ -1856,9 +1881,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=m2_x, y=m2_y, mode="lines+markers",
                     name=f"Forecast — Pace Adj ({adj_lbl})",
-                    line=dict(color="#00e676", width=2.0, dash="dashdot"),
-                    marker=dict(symbol="triangle-up-open", size=7, color="#00e676",
-                                line=dict(width=2, color="#00e676")),
+                    line=dict(color=_CH_M2, width=2.0, dash="dashdot"),
+                    marker=dict(symbol="triangle-up-open", size=7, color=_CH_M2,
+                                line=dict(width=2, color=_CH_M2)),
                     connectgaps=True, legendrank=6,
                     customdata=m2_hover,
                     hovertemplate="%{x}: %{customdata}<extra>Pace-Adj Fcst</extra>",
@@ -1868,17 +1893,11 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         f"Seasonal {lbl}Shipments — {field_label} ({unit_short})",
         "Month", f"{lbl}Volume ({unit_short})",
     ))
-    fig.update_layout(legend=dict(bgcolor="#ffffff", bordercolor="#c9ced3", borderwidth=1,
-                                  font=dict(size=11, color="#32373c")))
     _add_chart_watermark(fig, logo_b64)
     return fig
 
 
-_BAR_COLORS = [
-    "#1565c0","#2e7d32","#6a1b9a","#ad1457",
-    "#00695c","#e65100","#37474f","#4527a0",
-    "#558b2f","#00838f","#4e342e","#283593",
-]
+_BAR_COLORS = _CH_PAL[1:]          # the selected year takes the lead blue; the others follow in palette order
 
 
 def make_column_chart(data_pivot, stats, selected_years, cy,
@@ -1893,7 +1912,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     maxs = [stats[m]["max"] for m in months]
     fig.add_trace(go.Scatter(
         x=months + months[::-1], y=maxs + mins[::-1],
-        fill="toself", fillcolor="rgba(6,147,227,0.08)",
+        fill="toself", fillcolor=_ch_rgba(_CH_SAGE, 0.12),
         line=dict(color="rgba(0,0,0,0)"),
         name="Hist. Min–Max Range", hoverinfo="skip",
     ))
@@ -1904,8 +1923,8 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     ]
     fig.add_trace(go.Scatter(
         x=months, y=olys, mode="lines+markers", name="6-Yr Olympic Avg",
-        line=dict(color="#0693e3", width=2.5, dash="dot"),
-        marker=dict(symbol="diamond", size=7, color="#0693e3"),
+        line=dict(color=_CH_SAGE, width=2.5, dash="dot"),
+        marker=dict(symbol="diamond", size=7, color=_CH_SAGE),
         customdata=oly_hover,
         hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
     ))
@@ -1913,7 +1932,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     color_idx = 0
     for year in selected_years:
         vals  = [data_pivot[m].get(year) for m in months]
-        color = "#f9a825" if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
+        color = _CH_BLUE if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
         if year != cy:
             color_idx += 1
         bar_hover = [
@@ -1922,7 +1941,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         ]
         fig.add_trace(go.Bar(
             x=months, y=vals, name=year,
-            marker_color=color, opacity=0.85,
+            marker_color=color, opacity=0.92,
             customdata=bar_hover,
             hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
         ))
@@ -1964,7 +1983,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     pct_lys  = [d.get("pct_ly")  for d in sorted_data]
 
     def _colors(vals):
-        return ["#4caf50" if (v is not None and v >= 0) else "#ef5350" for v in vals]
+        return [_CH_POS if (v is not None and v >= 0) else _CH_NEG for v in vals]
 
     n     = len(labels)
     fig_h = max(400, n * 58 + 160)
@@ -1987,7 +2006,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     fig.add_trace(go.Bar(
         x=pct_avgs, y=labels,
         orientation="h",
-        name="% vs Olympic Avg",
+        name="% vs Olympic Avg", showlegend=False,
         marker_color=_colors(pct_avgs),
         marker_line_width=0,
         opacity=1.0,
@@ -2002,7 +2021,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
     fig.add_trace(go.Bar(
         x=pct_lys, y=labels,
         orientation="h",
-        name="% vs Last Year",
+        name="% vs Last Year", showlegend=False,
         marker_color=_colors(pct_lys),
         marker_line_width=0,
         opacity=0.55,
@@ -2013,44 +2032,24 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         hovertemplate="%{y}: %{customdata}<extra>% vs Last Year</extra>",
     ))
 
-    # Single zero-reference line across the whole chart
-    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2)
+    # The bars are green / red by sign, so the legend swatches are neutral (scatter traces: they take no bar slot)
+    for nm, op in (("% vs Olympic Avg", 1.0), ("% vs Last Year", 0.45)):
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=nm, hoverinfo="skip",
+                                 marker=dict(symbol="square", size=11, color=_CH_SAGE, opacity=op)))
 
+    # Single zero-reference line across the whole chart
+    fig.add_vline(x=0, line_color=_CH_MUTED, line_width=1.2)
+
+    fig.update_layout(**_ch_layout(f"{commodity_label} — Cumulative Shipment Snapshot", selected_year_label,
+                                   height=fig_h, hover="closest", margin=dict(l=10, r=120, t=88, b=50)))
     fig.update_layout(
-        barmode="group",
-        height=fig_h,
-        title=dict(
-            text=(f"{commodity_label} — Cumulative Shipment Snapshot"
-                  f"  ·  {selected_year_label}"),
-            font=dict(size=14, color="#ffffff", family="Arial"),
-            x=0.01,
-        ),
-        paper_bgcolor="#181c20",
-        plot_bgcolor="#1d2227",
-        font=dict(family="Arial", color="#d0d8e0", size=11),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom", y=1.02,
-            xanchor="left", x=0,
-            font=dict(color="#aab4c0", size=11),
-            bgcolor="rgba(0,0,0,0)",
-            itemsizing="constant",
-        ),
-        margin=dict(l=10, r=120, t=80, b=20),
-        bargap=0.28,
-        bargroupgap=0.06,
+        barmode="group", bargap=0.28, bargroupgap=0.06,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                    font=dict(color=_CH_MUTED, size=11), bgcolor="rgba(0,0,0,0)",
+                    bordercolor="rgba(0,0,0,0)", itemsizing="constant"),
     )
-    fig.update_xaxes(
-        ticksuffix="%",
-        gridcolor="#2e353d", gridwidth=0.5,
-        zeroline=False,
-        tickfont=dict(size=10),
-        range=x_range,
-    )
-    fig.update_yaxes(
-        gridcolor="#2e353d", gridwidth=0.5,
-        tickfont=dict(size=11),
-    )
+    fig.update_xaxes(ticksuffix="%", zeroline=False, tickfont=dict(size=10, color=_CH_MUTED), range=x_range)
+    fig.update_yaxes(showgrid=False, tickfont=dict(size=11, color=_CH_TEXT))
 
     # Annotation note at bottom explaining opacity difference
     fig.add_annotation(
@@ -2060,7 +2059,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         x=0.0, y=-0.04,
         xanchor="left", yanchor="top",
         showarrow=False,
-        font=dict(size=10, color="#5a6878", family="Arial"),
+        font=dict(size=10, color=_CH_MUTED),
     )
 
     _add_chart_watermark(fig, logo_b64)
@@ -2724,14 +2723,14 @@ def _render_ytd_scatter(
     for yr, ytd_h, final_h in points:
         idx      = yr_sorted.index(yr)
         t        = idx / max(n - 1, 1)   # 0 = oldest, 1 = newest
-        dot_col  = f"rgb({int(80+80*t)},{int(100+80*t)},{int(140+70*t)})"
+        dot_col  = _ch_mix(_CH_MIST, "#5f7267", t)
         fig.add_trace(go.Scatter(
             x=[ytd_h], y=[final_h],
             mode="markers+text",
             marker=dict(size=9, color=dot_col,
-                        line=dict(color="#1e2124", width=1)),
+                        line=dict(color="#ffffff", width=1)),
             text=[yr], textposition="top center",
-            textfont=dict(size=9, color=dot_col),
+            textfont=dict(size=9, color=_CH_MUTED),
             hovertemplate=(
                 f"<b>{yr}</b><br>"
                 f"MYTD thru {ytd_thru}: <b>{fn(ytd_h)}</b> {unit_short}<br>"
@@ -2749,7 +2748,7 @@ def _render_ytd_scatter(
         y=[slope * x_lo + intercept, slope * x_hi + intercept],
         mode="lines",
         name=f"OLS Fit  (R²={r2:.2f})",
-        line=dict(color="#78909c", width=1.5, dash="dot"),
+        line=dict(color="#8fa398", width=1.5, dash="dot"),
         hoverinfo="skip",
         showlegend=True,
         legendrank=800,
@@ -2765,9 +2764,9 @@ def _render_ytd_scatter(
         x=cy_ytd, y=0.98, yref="paper",
         text=f"CY MYTD<br>{fn(cy_ytd)} {unit_short}",
         showarrow=False,
-        font=dict(size=9, color=accent_color, family="Arial"),
+        font=dict(size=9, color=accent_color),
         xanchor="left", yanchor="top",
-        bgcolor="rgba(30,33,36,0.75)",
+        bgcolor="rgba(255,255,255,0.88)",
     )
 
     # M3 projected final horizontal line — same accent color as MYTD vertical
@@ -2782,9 +2781,9 @@ def _render_ytd_scatter(
         y=projected,
         text=f"<b>M3 Projection</b> {fn(projected)}",
         showarrow=False,
-        font=dict(size=9, color=accent_color, family="Arial"),
+        font=dict(size=9, color=accent_color),
         xanchor="left", yanchor="bottom",
-        bgcolor="rgba(30,33,36,0.75)",
+        bgcolor="rgba(255,255,255,0.88)",
     )
 
     # Projected CY star on regression line
@@ -2793,7 +2792,7 @@ def _render_ytd_scatter(
         mode="markers",
         marker=dict(size=14, symbol="star",
                     color=accent_color,
-                    line=dict(color="#ffffff", width=1.5)),
+                    line=dict(color=_CH_TEXT, width=1)),
         name=f"M3 Projection: {fn(projected)} {unit_short}",
         hovertemplate=(
             "<b>CY Model 3 Projection</b><br>"
@@ -2810,11 +2809,11 @@ def _render_ytd_scatter(
     pi = pace_info or {}
     _ref_lines = []
     if pi.get("usda_total"):
-        _ref_lines.append((pi["usda_total"],  "USDA Total",  "#ff1744", "dash"))
+        _ref_lines.append((pi["usda_total"],  "USDA Total",  _CH_NEG, "dash"))
     if pi.get("model1_total"):
-        _ref_lines.append((pi["model1_total"], "M1 Seasonal", "#fdd835", "dot"))
+        _ref_lines.append((pi["model1_total"], "M1 Seasonal", _CH_M1, "dot"))
     if pi.get("has_ytd") and pi.get("model2_total"):
-        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", "#00e676", "dashdot"))
+        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", _CH_M2, "dashdot"))
 
     for ref_val, ref_lbl, ref_col, ref_dash in _ref_lines:
         fig.add_shape(
@@ -2828,9 +2827,9 @@ def _render_ytd_scatter(
             y=ref_val,
             text=f"<b>{ref_lbl}</b> {fn(ref_val)}",
             showarrow=False,
-            font=dict(size=9, color=ref_col, family="Arial"),
+            font=dict(size=9, color=ref_col),
             xanchor="right", yanchor="bottom",
-            bgcolor="rgba(30,33,36,0.75)",
+            bgcolor="rgba(255,255,255,0.88)",
         )
 
     layout = _base_layout(
@@ -3239,13 +3238,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         else {}
     )
     _model_legend_html = (
-        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
-        f'<b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>'
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:{_CH_MUTED};">'
+        f'<b style="color:{_CH_M1};">●</b> Dotted gold line = <b>USDA Seasonal</b>'
         f' — distributes total via historical monthly share %<br>'
-        f'<b style="color:#00e676;">●</b> Green dash-dot line = <b>Pace-Adjusted</b>'
+        f'<b style="color:{_CH_M2};">●</b> Green dash-dot line = <b>Pace-Adjusted</b>'
         f' — shifts forecast based on YTD pace vs seasonal baseline'
         f' (activates once official data exists)<br>'
-        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band ='
+        f'<b style="color:{_CH_M1}; opacity:0.5;">▓</b> Shaded band ='
         f' <b>±0.5σ likely range</b> from historical variance in seasonal shares'
         f'</div>'
     )
@@ -3366,7 +3365,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     _render_ytd_scatter(
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
-        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        accent_color=cfg["country_colors"].get(field, _CH_BLUE),
         pace_info=pace_info,
     )
 
@@ -3828,11 +3827,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _W_SKIP_AGGREGATE = {"TotalNonUS", "MajorExporter"}
 
     _w_legend_html = (
-        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
-        f'<b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>'
-        f'<b style="color:#00e676;">●</b> Green dash-dot = <b>Pace-Adjusted</b>'
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:{_CH_MUTED};">'
+        f'<b style="color:{_CH_M1};">●</b> Dotted gold = <b>USDA Seasonal</b> forecast<br>'
+        f'<b style="color:{_CH_M2};">●</b> Green dash-dot = <b>Pace-Adjusted</b>'
         f' (activates once official data exists)<br>'
-        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range'
+        f'<b style="color:{_CH_M1}; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range'
         f'</div>'
     )
 
@@ -3945,7 +3944,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _render_ytd_scatter(
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
-        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        accent_color=cfg["country_colors"].get(field, _CH_BLUE),
         pace_info=pace_info_w,
     )
 
@@ -4147,17 +4146,17 @@ def _fetch_tdm_exports_cached(reporter: str, product_code: str, password: str) -
 
 # Consistent colors per partner
 _PARTNER_COLORS = {
-    "United States": "#0693e3",
-    "Brazil":        "#4caf50",
-    "Argentina":     "#f9a825",
-    "Ukraine":       "#ef5350",
-    "Russia":        "#ab47bc",
-    "Australia":     "#26c6da",
-    "Canada":        "#ff7043",
+    "United States": _CH_BLUE,
+    "Brazil":        _CH_SAGE,
+    "Argentina":     _CH_GOLD,
+    "Ukraine":       "#c0707f",
+    "Russia":        _CH_LAV,
+    "Australia":     "#5aa59a",
+    "Canada":        _CH_TERRA,
 }
 _FALLBACK_COLORS = [
-    "#78909c","#a5d6a7","#ffe082","#ef9a9a",
-    "#ce93d8","#80deea","#ffab91","#b0bec5",
+    "#8fa398", "#d7c98a", "#dba3ab", "#c3b8dc",
+    "#9fcfc6", "#e0b49e", "#a9b6c4", _CH_MIST,
 ]
 
 
@@ -4421,7 +4420,7 @@ def _run_china_imports_tab(logo_b64=None):
         oly_y = [oly_by_pos[p]  for p in sorted(oly_by_pos)]
         fig1.add_trace(go.Scatter(
             x=oly_x, y=oly_y, mode="lines", name="Olympic Avg",
-            line=dict(color="#8a9aaa", width=2, dash="dot"),
+            line=dict(color=_CH_SAGE, width=2.2, dash="dash"),
             customdata=[f"{v:,.0f} TMT" for v in oly_y],
             hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
         ))
@@ -4439,14 +4438,14 @@ def _run_china_imports_tab(logo_b64=None):
         y_vals = sub["TMT"].tolist()
 
         if my_s == cur_my_start:
-            color, lw, op = "#0693e3", 4.0, 1.0
+            color, lw, op = _CH_BLUE, 4.0, 1.0
         elif my_s == ly_start:
-            color, lw, op = "#ffffff", 2.5, 0.92
+            color, lw, op = _CH_TERRA, 2.5, 1.0
         else:
             idx = sorted_chart_starts.index(my_s)
             t   = idx / max(len(sorted_chart_starts) - 1, 1)
-            color = f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})"
-            lw, op = 1.5, 0.22 + 0.42 * t
+            color = _ch_mix("#cdd9d1", "#5f7267", t)
+            lw, op = 1.2 + 0.5 * t, 1.0
 
         fig1.add_trace(go.Scatter(
             x=x_vals, y=y_vals, mode="lines+markers", name=lbl,
@@ -4457,21 +4456,10 @@ def _run_china_imports_tab(logo_b64=None):
         ))
 
     my_conv = "Oct–Sep" if not is_wheat else "Jul–Jun"
-    fig1.update_layout(
-        height=420,
-        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
-        font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
-                   categoryorder="array", categoryarray=my_labels),
-        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=60, r=20, t=30, b=40),
-        hovermode="x unified",
-        title=dict(
-            text=f"Marketing Year convention: {my_conv}",
-            font=dict(size=10, color="#8a9aaa"), x=1, xanchor="right", y=0.01,
-        ),
-    )
+    fig1.update_layout(**_ch_layout("Monthly imports by marketing year (TMT)", f"Marketing year convention: {my_conv}",
+                                    None, "TMT", height=420, margin=dict(l=60, r=20, t=88, b=40)))
+    fig1.update_xaxes(tickfont=dict(size=10, color=_CH_MUTED), categoryorder="array", categoryarray=my_labels)
+    fig1.update_yaxes(tickformat=",.0f")
     _add_chart_watermark(fig1, logo_b64)
     st.plotly_chart(fig1, use_container_width=True)
 
@@ -4500,17 +4488,11 @@ def _run_china_imports_tab(logo_b64=None):
             hovertemplate="%{x}: %{customdata}<extra>" + partner + "</extra>",
         ))
 
-    fig2.update_layout(
-        barmode="stack", height=380,
-        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
-        font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
-                   categoryorder="array", categoryarray=my_labels),
-        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        margin=dict(l=60, r=20, t=30, b=40),
-        hovermode="x unified",
-    )
+    fig2.update_layout(**_ch_layout(f"Imports by source country, {sel_my_label} (TMT)", None,
+                                    None, "TMT", height=380, margin=dict(l=60, r=20, t=64, b=40)))
+    fig2.update_layout(barmode="stack")
+    fig2.update_xaxes(tickfont=dict(size=10, color=_CH_MUTED), categoryorder="array", categoryarray=my_labels)
+    fig2.update_yaxes(tickformat=",.0f")
     _add_chart_watermark(fig2, logo_b64)
     st.plotly_chart(fig2, use_container_width=True)
 
@@ -5039,18 +5021,16 @@ def _load_inspections(grain_code: str, start_month: int) -> pd.DataFrame:
     return _fgis_prepare(_fgis_fetch_raw(grain_code), start_month)
 
 
-# ── presentation: the light, sage palette of the CFTC COT dashboard ───────────
-_INSP_SURF, _INSP_BORDER, _INSP_TEXT, _INSP_MUTED, _INSP_SAGE = "#ffffff", "#d7e2dc", "#32373c", "#5f7267", "#5e7164"
-_INSP_BLUE, _INSP_TERRA, _INSP_LAV, _INSP_GOLD, _INSP_MIST = "#6fa8c4", "#c4785a", "#9b89c4", "#c4b456", "#b8c4bc"
-_INSP_POS, _INSP_NEG = "#16a34a", "#dc2626"
-_INSP_PAL = [_INSP_BLUE, _INSP_TERRA, _INSP_SAGE, _INSP_LAV, _INSP_GOLD, "#8fa398", "#d08fa0", "#7aa3a0"]
+# ── presentation: the shared light theme (CHART THEME, above) plus this tab's own colour maps ──
+_INSP_SURF, _INSP_BORDER, _INSP_TEXT, _INSP_MUTED, _INSP_SAGE = _CH_SURF, _CH_BORDER, _CH_TEXT, _CH_MUTED, _CH_SAGE
+_INSP_BLUE, _INSP_TERRA, _INSP_LAV, _INSP_GOLD, _INSP_MIST = _CH_BLUE, _CH_TERRA, _CH_LAV, _CH_GOLD, _CH_MIST
+_INSP_POS, _INSP_NEG = _CH_POS, _CH_NEG
+_INSP_PAL = _CH_PAL[:8]
 _INSP_REGION_COLOR = {"Gulf": _INSP_BLUE, "Pacific": _INSP_SAGE, "Interior": _INSP_TERRA, "Atlantic": _INSP_LAV,
                       "Great Lakes": _INSP_GOLD, "St. Lawrence Seaway": "#8fa398"}
 _INSP_CARRIER_COLOR = {"Ship": _INSP_BLUE, "Rail": _INSP_TERRA, "Container": _INSP_LAV, "Barge": _INSP_SAGE,
                        "Truck": _INSP_GOLD, "Other": _INSP_MIST}
 _INSP_SEG_COL = {"Origin": "region", "Destination": "dest", "Carrier": "carrier"}
-_INSP_AXIS = dict(gridcolor=_INSP_BORDER, linecolor=_INSP_BORDER, showgrid=True, zeroline=False,
-                  tickfont=dict(color=_INSP_MUTED, size=11), title_font=dict(color=_INSP_MUTED, size=11))
 _INSP_CSS = """
 <style>
 .insp-sec { color:#5f7267; font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; padding:10px 0 4px;
@@ -5083,18 +5063,6 @@ def _insp_dec(unit: str, ref) -> int:
     ref = 0.0 if ref is None or pd.isna(ref) else abs(float(ref))
     steps = ((100, 0), (1, 1), (0.1, 2), (0.01, 3)) if unit == "TMT" else ((10, 1), (1, 2), (0.1, 3), (0.01, 4))
     return next((d for floor, d in steps if ref >= floor), steps[-1][1] + 1 if ref > 0 else steps[1][1])
-
-
-def _insp_rgba(hex_color: str, alpha: float) -> str:
-    h = hex_color.lstrip("#")
-    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{alpha})"
-
-
-def _insp_mix(c1: str, c2: str, t: float) -> str:
-    """The colour a fraction t of the way from c1 to c2 (both '#rrggbb')."""
-    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
-    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
-    return "#" + "".join(f"{round(a[j] + (b[j] - a[j]) * t):02x}" for j in range(3))
 
 
 def _insp_plot(fig: go.Figure, key: str) -> None:
@@ -5132,25 +5100,13 @@ def _insp_tile(label: str, value: str, unit: str, lines: list) -> str:
 def _insp_style(fig: go.Figure, height: int, title: str | None = None, subtitle: str | None = None,
                 legend: bool = True, hover: str = "x unified", logo: str | None = None,
                 x_title: str | None = None, y_title: str | None = None) -> go.Figure:
-    head = None
-    if title:
-        text = f"<b>{title}</b>" + (f"<br><span style='font-size:12px;color:{_INSP_MUTED}'>{subtitle}</span>" if subtitle else "")
-        head = dict(text=text, x=0, xanchor="left", y=0.94, yanchor="top", font=dict(size=14, color=_INSP_TEXT))
-    fig.update_layout(
-        template="plotly_white", height=height,
-        margin=dict(l=10, r=10, t=(84 if subtitle else 62) if title else 24, b=10),
-        paper_bgcolor=_INSP_SURF, plot_bgcolor=_INSP_SURF, font=dict(color=_INSP_TEXT, size=11),
-        hovermode=hover,
-        hoverlabel=dict(bgcolor="#ffffff", bordercolor=_INSP_BORDER, font=dict(color=_INSP_TEXT, size=12)),
-        showlegend=legend,
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
-                    font=dict(size=11, color=_INSP_MUTED), bgcolor="rgba(0,0,0,0)"),
-        title=head,
-        xaxis=dict(**_INSP_AXIS, title=x_title), yaxis=dict(**_INSP_AXIS, title=y_title),
-    )
+    """This tab's charts: the shared light layout with the legend laid along the top, and the 50-year mark when asked."""
+    fig.update_layout(**_ch_layout(title, subtitle, x_title, y_title, height=height, legend=legend, hover=hover,
+                                   margin=dict(l=10, r=10, t=(88 if subtitle else 64) if title else 24, b=10)))
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                  bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
     if logo:
-        fig.add_layout_image(dict(source=logo, xref="paper", yref="paper", x=0.5, y=0.5, sizex=0.42, sizey=0.42,
-                                  xanchor="center", yanchor="middle", sizing="contain", opacity=0.09, layer="below"))
+        _add_chart_watermark(fig)
     return fig
 
 
@@ -5243,7 +5199,7 @@ def _insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, 
             lo = [min(C.at[y, weeks[i]] for y in prior6 if pd.notna(C.at[y, weeks[i]])) for i in rng]
             xs = [dates[i] for i in rng]
             fig.add_trace(go.Scatter(x=xs + xs[::-1], y=hi + lo[::-1], fill="toself", mode="lines", line=dict(width=0),
-                                     fillcolor=_insp_rgba(_INSP_SAGE, 0.13), name="6-yr range", hoverinfo="skip"))
+                                     fillcolor=_ch_rgba(_INSP_SAGE, 0.13), name="6-yr range", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=dates, y=oly, mode="lines", name="6-yr Olympic avg", customdata=weeks,
                                  line=dict(color=_INSP_SAGE, width=2.2, dash="dash"), hovertemplate=hov("6-yr Olympic avg")))
         fig.add_trace(go.Scatter(x=dates, y=ly_row, mode="lines", name="Last year", customdata=weeks,
@@ -5259,7 +5215,7 @@ def _insp_fig_weekly(dff, M, C, sel_my, sel_week, last_w, first_thu, view, seg, 
                 col = _insp_seg_color(name, seg, i)
                 fig.add_trace(go.Scatter(x=dates, y=pv.loc[name], mode="lines", name=name, stackgroup="seg",
                                          customdata=weeks, hovertemplate=hov(name), line=dict(width=0.6, color=col),
-                                         fillcolor=_insp_rgba(col, 0.75)))
+                                         fillcolor=_ch_rgba(col, 0.75)))
         sub = "Marketing year to date by week ending Thursday, against last year and the 6-year range."
     if sel_week < last_w:
         x = dates[sel_week - 1].strftime("%Y-%m-%d")
@@ -5298,7 +5254,7 @@ def _insp_fig_multi(M, C, sel_my, view, years_mode, smooth, first_thu, unit, gra
         elif y == sel_my - 1:
             style = dict(color=_INSP_TERRA, width=2.2)
         else:
-            style = dict(color=_insp_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3)
+            style = dict(color=_ch_mix("#d7e2dc", "#5f7267", older.index(y) / max(len(older) - 1, 1)), width=1.3)
         fig.add_trace(go.Scatter(x=row.index, y=row.values, mode="lines", name=lbl, line=style,
                                  hovertemplate=f"Wk %{{x}}: %{{y:,.{dec}f}} {unit}<extra>{lbl}</extra>"))
     oly = [_insp_olympic(mat, prior6, n) for n in weeks]
@@ -5637,33 +5593,33 @@ _ESR_BU_FACTOR = {401: 39.368, 801: 36.744, 107: 36.744, 701: 39.368}
 # MT → MBU per 1 MT (multiply tmt by factor to get MBU)
 
 # ── Vessel Lineup constants ───────────────────────────────────────────────────
-_VL_GREEN      = "#5e7164"
-_VL_GREEN_LT   = "#8db89a"
-_VL_BG         = "#141c18"
-_VL_BORDER     = "#253328"
-_VL_TEXT       = "#e8ede9"
-_VL_MUTED      = "#7a9485"
-_VL_COL_POS    = "#8db89a"
-_VL_COL_NEG    = "#e07070"
-_VL_COL_AMB    = "#c4b456"
-_VL_COL_BLUE   = "#6fa8c4"
-_VL_COL_PURP   = "#9b89c4"
-_VL_COL_ORG    = "#c4896a"
-_VL_COL_TEAL   = "#6ac4b8"
+_VL_GREEN      = _CH_SAGE
+_VL_GREEN_LT   = _CH_BLUE
+_VL_BG         = _CH_SURF
+_VL_BORDER     = _CH_BORDER
+_VL_TEXT       = _CH_TEXT
+_VL_MUTED      = _CH_MUTED
+_VL_COL_POS    = _CH_POS
+_VL_COL_NEG    = _CH_NEG
+_VL_COL_AMB    = _CH_GOLD
+_VL_COL_BLUE   = _CH_BLUE
+_VL_COL_PURP   = _CH_LAV
+_VL_COL_ORG    = _CH_TERRA
+_VL_COL_TEAL   = "#5aa59a"
 _VL_COMM_COLORS = {
-    "Corn":          _VL_COL_AMB,
-    "Wheat":         "#e8c96a",
-    "Soybeans/Meal": _VL_COL_POS,
-    "Sorghum":       _VL_COL_ORG,
-    "Dist. Grains":  _VL_COL_PURP,
-    "Rice":          "#c46a8d",
-    "Mixed Cargo":   _VL_COL_BLUE,
-    "Other":         "#5a6660",
+    "Corn":          _CH_GOLD,
+    "Wheat":         "#d9904a",
+    "Soybeans/Meal": _CH_SAGE,
+    "Sorghum":       _CH_TERRA,
+    "Dist. Grains":  _CH_LAV,
+    "Rice":          "#c0707f",
+    "Mixed Cargo":   _CH_BLUE,
+    "Other":         _CH_MIST,
 }
 _VL_REGION_COLORS = {
-    "USG": _VL_COL_BLUE,
-    "PNW": _VL_COL_POS,
-    "TXG": _VL_COL_AMB,
+    "USG": _CH_BLUE,
+    "PNW": _CH_SAGE,
+    "TXG": _CH_GOLD,
 }
 _VL_DATA_FILENAME  = "Vessel Lineup - US.xlsx"
 _VL_REPO_FILE_PATH = os.path.join(
@@ -5674,17 +5630,17 @@ _VL_ONEDRIVE_PATH  = (
     r"\JSA - Documents\Research Analyst\Misc\Boat Lineup\Vessel Lineup - US.xlsx"
 )
 _VL_BASE_LAYOUT = dict(
-    plot_bgcolor="#1a2620",
-    paper_bgcolor=_VL_BG,
-    font=dict(color=_VL_MUTED, family="Arial"),
-    xaxis=dict(gridcolor=_VL_BORDER, linecolor=_VL_BORDER,
-               tickfont=dict(color=_VL_MUTED)),
-    yaxis=dict(gridcolor=_VL_BORDER, linecolor=_VL_BORDER,
-               tickfont=dict(color=_VL_MUTED)),
-    legend=dict(bgcolor="#1a2620", bordercolor=_VL_BORDER, borderwidth=1,
-                font=dict(color=_VL_TEXT)),
-    margin=dict(l=10, r=10, t=36, b=10),
-    title_font=dict(size=12, color=_VL_MUTED),
+    template="plotly_white",
+    plot_bgcolor=_CH_SURF,
+    paper_bgcolor=_CH_SURF,
+    font=dict(color=_CH_MUTED, family=_CH_FONT, size=11),
+    xaxis=dict(**_CH_AXIS),
+    yaxis=dict(**_CH_AXIS),
+    legend=dict(bgcolor="rgba(255,255,255,0.92)", bordercolor=_CH_BORDER, borderwidth=1,
+                font=dict(color=_CH_MUTED, size=11)),
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor=_CH_BORDER, font=dict(color=_CH_TEXT, size=12)),
+    margin=dict(l=10, r=10, t=44, b=10),
+    title_font=dict(size=14, color=_CH_TEXT),
     title_x=0,
 )
 
@@ -5823,14 +5779,14 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         "New Crop Outstanding":  "next_outstanding",
     }
     _METRIC_COLORS = {
-        "net_sales":       JSA_CYAN,
-        "gross_sales":     "#26c6da",
-        "exports":         JSA_GREEN,
-        "outstanding":     "#f9a825",
-        "ytd_exports":     "#ab47bc",
-        "ytd_commit":      "#ff7043",
-        "next_sales":      "#78909c",
-        "next_outstanding":"#a5d6a7",
+        "net_sales":       _CH_BLUE,
+        "gross_sales":     "#5aa59a",
+        "exports":         _CH_SAGE,
+        "outstanding":     _CH_GOLD,
+        "ytd_exports":     _CH_LAV,
+        "ytd_commit":      _CH_TERRA,
+        "next_sales":      "#7b8fb5",
+        "next_outstanding":"#8fa398",
     }
 
     # ── Filter panel ──────────────────────────────────────────────────────────
@@ -5969,18 +5925,14 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
             col_key = _ESR_METRICS[ml]
             fig_wk.add_trace(go.Bar(
                 x=wk_totals["week_date"], y=wk_totals[col_key],
-                name=ml, marker_color=_METRIC_COLORS.get(col_key, JSA_CYAN),
+                name=ml, marker_color=_METRIC_COLORS.get(col_key, _CH_BLUE),
                 hovertemplate=f"Wk %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra>{ml}</extra>",
             ))
-        fig_wk.update_layout(
-            barmode="group",
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
-            yaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10), height=360,
-        )
+        fig_wk.update_layout(**_ch_layout(None, None, "Week ending", unit_short, height=380,
+                                          margin=dict(l=10, r=10, t=44, b=10)))
+        fig_wk.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                                          bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig_wk.update_yaxes(tickformat=",")
         st.plotly_chart(fig_wk, use_container_width=True)
     else:
         st.info("Select at least one metric in Filters to show the weekly chart.")
@@ -5994,7 +5946,7 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
     all_cum_years = sorted(set([sel_my_year] + comp_years), reverse=True)
 
     fig_cum = go.Figure()
-    _CUM_PAL = [JSA_CYAN, "#4a6741", "#f9a825", "#ef5350", "#ab47bc", "#26c6da", "#ff7043"]
+    _CUM_PAL = _CH_PAL[1:]               # the selected year is always the lead blue; the others follow in palette order
 
     for idx, yr in enumerate(all_cum_years):
         if yr == sel_my_year:
@@ -6018,24 +5970,19 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
             .rename(columns={cum_col: "cum_val"})
         )
         is_sel = (yr == sel_my_year)
-        color  = _CUM_PAL[idx % len(_CUM_PAL)]
+        color  = _CH_BLUE if is_sel else _CUM_PAL[idx % len(_CUM_PAL)]
         fig_cum.add_trace(go.Scatter(
             x=cum_wk["week_date"], y=cum_wk["cum_val"],
             mode="lines", name=f"MY {yr}",
-            line=dict(color=color, width=2.5 if is_sel else 1.5,
-                      dash="solid" if is_sel else "dot"),
-            opacity=1.0 if is_sel else 0.75,
+            line=dict(color=color, width=3.4 if is_sel else 1.8),
             hovertemplate=f"MY {yr} · %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra></extra>",
         ))
 
-    fig_cum.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(title=f"Cumulative {unit_short}", gridcolor="#2e353d", showgrid=True),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10), height=360,
-    )
+    fig_cum.update_layout(**_ch_layout(None, None, "Week ending", f"Cumulative {unit_short}", height=380,
+                                       margin=dict(l=10, r=10, t=44, b=10), hover="closest"))
+    fig_cum.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                      bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+    fig_cum.update_yaxes(tickformat=",")
     st.plotly_chart(fig_cum, use_container_width=True)
 
     # ── Destination charts ────────────────────────────────────────────────────
@@ -6066,37 +6013,37 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         fig_dest = go.Figure(go.Bar(
             x=top_dest_df[dest_col], y=top_dest_df["country"],
             orientation="h",
-            marker_color=_METRIC_COLORS.get(dest_col, JSA_CYAN),
+            marker_color=_METRIC_COLORS.get(dest_col, _CH_BLUE),
             text=top_dest_df[dest_col].apply(lambda v: f"{v:,.{dec}f}"),
-            textposition="outside",
+            textposition="outside", textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False,
             hovertemplate="%{y}: %{x:,.0f} " + unit_short + "<extra></extra>",
         ))
-        fig_dest.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
-            yaxis=dict(gridcolor="#2e353d", showgrid=False),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=max(320, len(top_dest_df) * 24),
-        )
+        fig_dest.update_layout(**_ch_layout(None, None, unit_short, None, legend=False, hover="closest",
+                                            height=max(320, len(top_dest_df) * 26),
+                                            margin=dict(l=10, r=50, t=36, b=10)))
+        fig_dest.update_xaxes(tickformat=",")
+        fig_dest.update_yaxes(showgrid=False, automargin=True)
         st.plotly_chart(fig_dest, use_container_width=True)
 
     with col_pie:
         st.markdown(f"#### {dest_metric_label} Share (pie)")
         pie_df = top_dest_df[top_dest_df[dest_col] > 0]
         if not pie_df.empty:
+            pie_df = pie_df.sort_values(dest_col, ascending=False)
+            _share = pie_df[dest_col] / pie_df[dest_col].sum() * 100
             fig_pie = go.Figure(go.Pie(
                 labels=pie_df["country"], values=pie_df[dest_col],
-                hole=0.45,
-                textfont=dict(color="#cdd9e5", size=10),
+                hole=0.5, sort=False,
+                marker=dict(colors=[_CH_PAL[i % len(_CH_PAL)] for i in range(len(pie_df))],
+                            line=dict(color="#ffffff", width=2)),
+                text=[f"{s:.0f}%" if s >= 3 else "" for s in _share],          # a label only where the slice has room
+                textinfo="text", textposition="inside", insidetextorientation="horizontal",
+                textfont=dict(color="#ffffff", size=11),
                 hovertemplate="%{label}: %{value:,.0f} " + unit_short + " (%{percent})<extra></extra>",
             ))
-            fig_pie.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#cdd9e5", size=11),
-                legend=dict(bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=10, r=10, t=10, b=10), height=max(320, len(pie_df) * 24),
-            )
+            fig_pie.update_layout(**_ch_layout(None, None, legend=True, hover="closest", height=max(320, len(pie_df) * 24),
+                                               margin=dict(l=10, r=10, t=36, b=10)))
+            fig_pie.update_layout(legend=dict(orientation="v", x=1.0, y=0.5, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
             st.plotly_chart(fig_pie, use_container_width=True)
 
     # ── All-metrics country table ─────────────────────────────────────────────
@@ -6284,6 +6231,14 @@ def _vl_sec(label):
     st.markdown(f'<div class="vl-sec-hdr">{label}</div>', unsafe_allow_html=True)
 
 
+def _vl_style(fig: go.Figure, **extra) -> go.Figure:
+    """The Vessel tab's light chart layout, with the title in bold like every other chart."""
+    fig.update_layout(**_VL_BASE_LAYOUT, **extra)
+    if fig.layout.title.text:
+        fig.update_layout(title_text=f"<b>{fig.layout.title.text}</b>")
+    return fig
+
+
 def _vl_bar_comm(df, title):
     g = (df.groupby("COMM_GRP").size()
            .reset_index(name="Vessels")
@@ -6291,7 +6246,7 @@ def _vl_bar_comm(df, title):
     fig = px.bar(g, x="COMM_GRP", y="Vessels",
                  color="COMM_GRP", color_discrete_map=_VL_COMM_COLORS,
                  title=title, labels={"COMM_GRP": "Commodity"})
-    fig.update_layout(**_VL_BASE_LAYOUT, showlegend=False)
+    _vl_style(fig, showlegend=False)
     fig.update_traces(marker_line_width=0)
     return fig
 
@@ -6305,7 +6260,7 @@ def _vl_bar_monthly_stacked(df, title, color_col="COMM_GRP"):
                  color=color_col, color_discrete_map=cmap,
                  barmode="stack", title=title,
                  labels={"SAIL_MONTH": "Month", color_col: lbl})
-    fig.update_layout(**_VL_BASE_LAYOUT)
+    _vl_style(fig)
     fig.update_xaxes(tickformat="%b %Y")
     fig.update_traces(marker_line_width=0)
     return fig
@@ -6432,7 +6387,7 @@ def _vl_page_summary(frames, n_months, trends_regions=None, latest_date=None):
                      barmode="stack", title="Lined-Up Vessels by Region & Commodity",
                      category_orders={"REGION": ["USG", "PNW", "TXG"]},
                      labels={"REGION": "Region", "COMM_GRP": "Commodity"})
-        fig.update_layout(**_VL_BASE_LAYOUT)
+        _vl_style(fig)
         fig.update_traces(marker_line_width=0)
         st.plotly_chart(fig, use_container_width=True)
     with ch2:
@@ -6441,7 +6396,7 @@ def _vl_page_summary(frames, n_months, trends_regions=None, latest_date=None):
                       color="REGION", color_discrete_map=_VL_REGION_COLORS,
                       barmode="stack", title="Lined-Up Vessels by Commodity & Region",
                       labels={"COMM_GRP": "Commodity", "REGION": "Region"})
-        fig2.update_layout(**_VL_BASE_LAYOUT)
+        _vl_style(fig2)
         fig2.update_traces(marker_line_width=0)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -6532,7 +6487,7 @@ def _vl_page_region(df, region_label, n_months):
                    title="Shipped Volume by Month (TMT — excludes RVT)",
                    labels={"SAIL_MONTH": "Month", "MT_kMT": "TMT"},
                    color_discrete_sequence=[_VL_GREEN_LT])
-    fig_v.update_layout(**_VL_BASE_LAYOUT)
+    _vl_style(fig_v)
     fig_v.update_xaxes(tickformat="%b %Y")
     fig_v.update_traces(marker_line_width=0)
     st.plotly_chart(fig_v, use_container_width=True)
@@ -6798,13 +6753,16 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         fig = go.Figure()
         if have_prior:
             fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier",
-                                 marker_color="rgba(128,128,128,0.45)"))
-        fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=JSA_CYAN,
-                             text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside"))
-        fig.update_layout(barmode="group", height=max(340, len(show) * 34), margin=dict(l=10, r=40, t=10, b=10),
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                          xaxis=dict(title=unit, gridcolor="rgba(128,128,128,0.25)"),
-                          yaxis=dict(autorange="reversed"), legend=dict(orientation="h", y=1.06))
+                                 marker_color=_CH_MIST))
+        fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=_CH_BLUE,
+                             text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside",
+                             textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        fig.update_layout(**_ch_layout(None, None, unit, None, hover="closest", height=max(340, len(show) * 34),
+                                       margin=dict(l=10, r=50, t=44, b=10)))
+        fig.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                                       bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig.update_xaxes(tickformat=",")
+        fig.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
         st.plotly_chart(fig, use_container_width=True)
 
     with col_trend:
@@ -6815,17 +6773,17 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         win = win.assign(dest=win["country"].where(win["country"].isin(lead), "All other"))
         mo = win.groupby(["ym", "dest"])["vol"].sum().reset_index()
         fig2 = go.Figure()
-        palette = [JSA_CYAN, "#4a6741", "#e0a030", "#b5523b", "#7b5ea7", "#2f8f9d", "#8c6d46", "#9aa5b1"]
+        palette = _CH_PAL[:7] + [_CH_MIST]                     # the seven leading countries, then "All other"
         for i, d in enumerate(lead + ["All other"]):
             s = mo[mo["dest"] == d]
             if s.empty:
                 continue
             fig2.add_trace(go.Bar(x=[mon(v) for v in s["ym"]], y=s["vol"], name=d, marker_color=palette[i]))
-        fig2.update_layout(barmode="stack", height=max(340, len(show) * 34), margin=dict(l=10, r=10, t=10, b=10),
-                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                           yaxis=dict(title=unit, gridcolor="rgba(128,128,128,0.25)"),
-                           xaxis=dict(categoryorder="array", categoryarray=[mon(v) for v in range(t_start, last_ym + 1)]),
-                           legend=dict(orientation="h", y=-0.2))
+        fig2.update_layout(**_ch_layout(None, None, None, unit, height=max(340, len(show) * 34),
+                                        margin=dict(l=10, r=10, t=10, b=10)))
+        fig2.update_layout(barmode="stack", legend=dict(orientation="h", y=-0.2, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig2.update_xaxes(categoryorder="array", categoryarray=[mon(v) for v in range(t_start, last_ym + 1)])
+        fig2.update_yaxes(tickformat=",")
         st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown(f"#### {Noun} detail — {span}")
