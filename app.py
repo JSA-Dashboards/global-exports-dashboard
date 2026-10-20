@@ -4891,11 +4891,43 @@ def _fgis_prepare(raw: pd.DataFrame, start_month: int) -> pd.DataFrame:
     return df[["week_end", "my", "my_week", "dest", "region", "port", "carrier", "cls", "mt", "lbs"]].reset_index(drop=True)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_resource(ttl=3600, show_spinner=False)
+def _insp_store() -> dict:
+    """Prepared weekly inspections, kept for an hour: {grain code: DataFrame}. A resource rather than st.cache_data, so the three
+    grains of the snapshot can be fetched on parallel threads and the detail view shares what the snapshot loaded. A frame taken
+    from it is shared: never modify one in place."""
+    return {"lock": threading.Lock(), "frames": {}}
+
+
+def _insp_frames(grains: list, store: dict | None = None) -> dict:
+    """{grain code: prepared frame, or the Exception that stopped it} for [(grain code, marketing-year start month), ...]. A frame
+    not held yet is fetched (the grains in parallel); a failure is handed back and never stored, so a bad Socrata moment is not
+    kept for an hour."""
+    store = store if store is not None else _insp_store()
+    with store["lock"]:
+        todo = [g for g in grains if g[0] not in store["frames"]]
+    failed: dict = {}
+    if todo:
+        with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+            futures = {code: pool.submit(lambda c=code, m=month: _fgis_prepare(_fgis_fetch_raw(c), m)) for code, month in todo}
+        for code, fut in futures.items():                       # the with-block has waited for every fetch
+            try:
+                frame = fut.result()
+            except Exception as e:
+                failed[code] = e
+            else:
+                with store["lock"]:
+                    store["frames"][code] = frame
+    with store["lock"]:
+        return {code: failed.get(code, store["frames"].get(code)) for code, _month in grains}
+
+
 def _load_inspections(grain_code: str, start_month: int) -> pd.DataFrame:
-    """Prepared weekly inspections for one grain. Raises on a failed fetch, so st.cache_data never keeps an empty
-    frame for an hour after a bad Socrata moment."""
-    return _fgis_prepare(_fgis_fetch_raw(grain_code), start_month)
+    """Prepared weekly inspections for one grain (shared with the snapshot). Raises on a failed fetch."""
+    got = _insp_frames([(grain_code, start_month)])[grain_code]
+    if isinstance(got, Exception):
+        raise got
+    return got
 
 
 # ── presentation: the shared light theme (CHART THEME, above) plus this tab's own colour maps ──
@@ -4943,9 +4975,22 @@ _INSP_CSS = """
 .esr-sum tr.gap td { padding:3px; border:0; }
 .esr-sum tr td.pos { color:#16a34a; font-weight:600; }
 .esr-sum tr td.neg { color:#dc2626; font-weight:600; }
+/* the summary snapshots: one card per commodity */
+.snap-card { background:#fff; border:1px solid #d7e2dc; border-top:3px solid #5e7164; border-radius:10px; overflow:hidden; }
+.snap-head { background:#f3f7f4; border-bottom:1px solid #d7e2dc; padding:9px 14px 8px; }
+.snap-head b { display:block; color:#32373c; font-size:.98rem; }
+.snap-head span { display:block; color:#5f7267; font-size:.7rem; line-height:1.35; margin-top:2px; }
+.snap-kpi { padding:9px 14px 8px; border-bottom:1px solid #e8eeea; }
+.snap-kpi:last-child { border-bottom:0; }
+.snap-val { color:#32373c; font-size:1.45rem; font-weight:700; line-height:1.15; }
+.snap-top { color:#32373c; font-size:1.1rem; font-weight:700; line-height:1.2; }
+.snap-off { color:#5f7267; font-size:.8rem; padding:12px 14px; }
 </style>
 """
-_INSP_RESET_KEYS = ("insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg")
+_INSP_RESET_KEYS = ("insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg", "insp_units_")
+# every widget of the Detail view that can hold a value (not the buttons): kept alive while the snapshot is showing
+_INSP_KEEP = ("insp_grain", "insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg",
+              "insp_years", "insp_smooth", "insp_topn", "insp_lvl")
 
 
 def _fp_reset(prefixes: tuple) -> None:
@@ -4953,6 +4998,27 @@ def _fp_reset(prefixes: tuple) -> None:
     at its default on the rerun this click triggers."""
     for k in [k for k in st.session_state.keys() if str(k).startswith(prefixes)]:
         del st.session_state[k]
+
+
+def _keep_state(prefixes: tuple) -> None:
+    """Streamlit forgets a widget's value on any run that does not draw the widget. While a tab shows its snapshot the Detail widgets
+    are not drawn, so their values are re-assigned here and are still there when the user is back."""
+    for k in [k for k in st.session_state.keys() if str(k).startswith(prefixes)]:
+        st.session_state[k] = st.session_state[k]
+
+
+def _view_row(prefix: str, use_bushels: bool):
+    """The two switches above a tab: Detail or the Summary snapshot, and the unit. The unit starts from the page-wide Million Bushels
+    toggle: its key carries that setting, so flipping the page toggle hands this switch a fresh default, and a choice made here never
+    outlives it. Returns (snapshot showing?, Mbu?)."""
+    c_mode, c_unit, _ = st.columns([2.1, 1.5, 3.4])
+    mode = c_mode.segmented_control("Show", ["Detail", "Summary snapshot"], default="Detail", key=f"{prefix}_mode") or "Detail"
+    start = "Mbu" if use_bushels else "TMT"
+    unit = c_unit.segmented_control(
+        "Units", ["TMT", "Mbu"], default=start, key=f"{prefix}_units_{int(use_bushels)}",
+        help="TMT = thousand metric tons. Mbu = million bushels (corn and sorghum 56 lb, soybeans and wheat 60 lb). "
+             "Meal, oil, rice, beef, pork and sunflower have no bushel weight and stay in TMT.") or start
+    return mode == "Summary snapshot", unit == "Mbu"
 
 
 def _fp_group(text: str) -> None:
@@ -5009,7 +5075,7 @@ def _insp_delta_line(p, text: str) -> str:
     if p is None:
         return f'<div class="insp-line">— {text}</div>'
     col, arrow = (_INSP_POS, "▲") if p >= 0 else (_INSP_NEG, "▼")
-    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(p):.1f}%</b> {text}</div>'
+    return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(p):,.1f}%</b> {text}</div>'
 
 
 def _insp_tile(label: str, value: str, unit: str, lines: list) -> str:
@@ -5066,6 +5132,19 @@ def _insp_matrices(df_all: pd.DataFrame, df_f: pd.DataFrame):
 
 def _insp_olympic(mat: pd.DataFrame, years: list, week: int):
     return olympic_avg([float(mat.at[y, week]) for y in years if week in mat.columns and pd.notna(mat.at[y, week])])
+
+
+def _insp_pace(M: pd.DataFrame, C: pd.DataFrame, sel_my: int, sel_week: int) -> dict:
+    """The selected week and the marketing year to date against the prior week, the same week last year and the 6-year Olympic average."""
+    prior6 = [y for y in M.index if y < sel_my][-6:]
+
+    def cell(mat, y, n):
+        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
+
+    return dict(w_cur=cell(M, sel_my, sel_week), c_cur=cell(C, sel_my, sel_week),
+                w_prev=cell(M, sel_my, sel_week - 1) if sel_week > 1 else None,
+                w_ly=cell(M, sel_my - 1, sel_week), c_ly=cell(C, sel_my - 1, sel_week),
+                w_oly=_insp_olympic(M, prior6, sel_week), c_oly=_insp_olympic(C, prior6, sel_week))
 
 
 def _insp_month_ticks(first_thu: pd.Timestamp, n_weeks: int):
@@ -5257,6 +5336,11 @@ def _insp_fig_donut(frame, by, unit, title, subtitle, colors=None, top_n=8, min_
 def _insp_render(use_bushels: bool) -> None:
     st.markdown(_INSP_CSS, unsafe_allow_html=True)
     logo = _load_logo_b64(LOGO_50YR_PATH)
+    snapshot, use_bushels = _view_row("insp", use_bushels)
+    if snapshot:
+        _keep_state(_INSP_KEEP)
+        _insp_snapshot(use_bushels)
+        return
 
     # ── filters: always on show, and they apply to the tiles, the table and every chart ──────────────────────────────
     with st.container(border=True, key="insp_filters"):
@@ -5339,15 +5423,8 @@ def _insp_render(use_bushels: bool) -> None:
 
     # ── pace numbers ──────────────────────────────────────────────────────────
     M, C = _insp_matrices(df, dff)
-    prior6 = [y for y in M.index if y < sel_my][-6:]
-
-    def cell(mat, y, n):
-        return None if (y not in mat.index or n not in mat.columns or pd.isna(mat.at[y, n])) else float(mat.at[y, n])
-
-    w_cur, c_cur = cell(M, sel_my, sel_week), cell(C, sel_my, sel_week)
-    w_prev = cell(M, sel_my, sel_week - 1) if sel_week > 1 else None
-    w_ly, c_ly = cell(M, sel_my - 1, sel_week), cell(C, sel_my - 1, sel_week)
-    w_oly, c_oly = _insp_olympic(M, prior6, sel_week), _insp_olympic(C, prior6, sel_week)
+    pace = _insp_pace(M, C, sel_my, sel_week)
+    w_cur, c_cur, w_prev, w_ly, c_ly, w_oly, c_oly = (pace[k] for k in ("w_cur", "c_cur", "w_prev", "w_ly", "c_ly", "w_oly", "c_oly"))
 
     cur = dff[dff["my"] == sel_my]
     wk = cur[cur["my_week"] == sel_week]
@@ -5585,7 +5662,9 @@ _ESR_METRICS = {
 }
 _ESR_LABEL = {col: label for label, (col, _flow) in _ESR_METRICS.items()}
 _ESR_FLOW = {col: flow for _label, (col, flow) in _ESR_METRICS.items()}
-_ESR_RESET_KEYS = ("esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_")
+_ESR_RESET_KEYS = ("esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_", "esr_units_")
+_ESR_KEEP = ("esr_comm", "esr_my_", "esr_week_", "esr_metric", "esr_reg_", "esr_dst_", "esr_range", "esr_kind", "esr_ma", "esr_years",
+             "esr_cum", "esr_smooth", "esr_period", "esr_topn", "esr_pct")
 _ESR_NAME_FIX = {
     "KOREA, REPUBLIC OF": "South Korea", "KOREA, DEMOCRATIC PEOPLE'S REP": "North Korea",
     "CHINA, PEOPLES REPUBLIC OF": "China", "RUSSIAN FEDERATION": "Russia", "BYELARUS, REPUBLIC OF": "Belarus",
@@ -5688,11 +5767,11 @@ def _esr_fetch_my(code: int, my: int) -> pd.DataFrame:
     return _esr_prepare(_esr_get(f"exports/commodityCode/{code}/allCountries/marketYear/{my}"), code, my)
 
 
-def _esr_history(code: int, current: int, depth: int = _ESR_DEPTH):
+def _esr_history(code: int, current: int, depth: int = _ESR_DEPTH, store: dict | None = None):
     """(frame, failed years): the `depth` marketing years ending at `current`, every destination. Years not held yet are
     fetched in parallel. A past year that fails is left out and tried again after five minutes (not on every click); the
-    current year failing raises."""
-    store = _esr_store()
+    current year failing raises. `store` lets a worker thread (which must not call st.cache_resource) pass in the one it was handed."""
+    store = store if store is not None else _esr_store()
     years = [current - i for i in range(depth)]
     now = time.time()
     with store["lock"]:
@@ -5985,6 +6064,11 @@ def _esr_fig_dest(vals: pd.Series, top_n: int, unit: str, title: str, subtitle: 
 def _esr_render(use_bushels: bool) -> None:
     st.markdown(_INSP_CSS, unsafe_allow_html=True)
     logo = _load_logo_b64(LOGO_50YR_PATH)
+    snapshot, use_bushels = _view_row("esr", use_bushels)
+    if snapshot:
+        _keep_state(_ESR_KEEP)
+        _esr_snapshot(use_bushels)
+        return
     try:
         cat = _esr_catalog()
     except Exception as e:
@@ -6213,6 +6297,248 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         _esr_render(use_bushels)
     except Exception as e:
         st.error(f"Export Sales tab error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY SNAPSHOTS  (the KPI tiles of the Inspections and Export Sales tabs, one card per commodity)
+#   Export Sales: corn, soybeans, soybean meal, soybean oil and wheat from the ESR weekly report.
+#   Inspections: corn, soybeans and wheat from FGIS. FGIS inspects grain, not products, so the soybean meal and soybean oil cards
+#   show weekly shipments (the weekly exports of that same ESR report) instead.
+#   Each card is the latest week of its own source; the unit follows the tab's Units switch (meal and oil have no bushel weight).
+# ─────────────────────────────────────────────────────────────────────────────
+_SNAP_ORDER = ("Corn", "Soybeans", "Soybean meal", "Soybean oil", "Wheat")
+_SNAP_COLOR = {"Corn": _CH_GOLD, "Soybeans": _CH_SAGE, "Soybean meal": _CH_BLUE, "Soybean oil": _CH_TERRA, "Wheat": "#d9904a"}
+_SNAP_ESR = {"Corn": "Corn", "Soybeans": "Soybeans", "Soybean meal": "Soybean meal", "Soybean oil": "Soybean oil", "Wheat": "Wheat - all"}
+_SNAP_INSP = {"Corn": "Corn", "Soybeans": "Soybeans", "Wheat": "Wheat"}               # card -> _INSP_GRAINS key
+_ESR_SNAP_DEPTH = 7                       # the current marketing year and six before it: a year ago and the 6-year Olympic average
+
+
+def _snap_kpi(label: str, value: str, unit: str, lines: list) -> str:
+    unit_html = f'<span class="insp-tile-unit">{unit}</span>' if unit else ""
+    return (f'<div class="snap-kpi"><div class="insp-tile-label">{label}</div>'
+            f'<div class="snap-val">{value}{unit_html}</div>{"".join(lines)}</div>')
+
+
+def _snap_top(label: str, name, lines: list) -> str:
+    return (f'<div class="snap-kpi"><div class="insp-tile-label">{label}</div>'
+            f'<div class="snap-top">{_html_escape(str(name))}</div>{"".join(lines)}</div>')
+
+
+def _snap_card(title: str, subs: list, kpis: list) -> str:
+    """A card: the commodity, a two-line header (what it is, which week), then the KPI blocks. Two lines on every card keeps
+    the rows of neighbouring cards level."""
+    head = "".join(f"<span>{s}</span>" for s in subs)
+    return (f'<div class="snap-card" style="border-top-color:{_SNAP_COLOR[title]}">'
+            f'<div class="snap-head"><b>{title}</b>{head}</div>{"".join(kpis)}</div>')
+
+
+def _snap_off(title: str, why: str) -> str:
+    return (f'<div class="snap-card" style="border-top-color:{_SNAP_COLOR[title]}"><div class="snap-head"><b>{title}</b>'
+            f'<span>not available just now</span><span>&nbsp;</span></div><div class="snap-off">{_html_escape(why)}</div></div>')
+
+
+def _snap_top_lines(vals: pd.Series, period: str):
+    """(name, the two lines under it) of the largest entry of a series of volumes: its share and the next two."""
+    s = vals[vals > 1e-12].sort_values(ascending=False)
+    tot = float(s.sum())
+    if s.empty or tot <= 0:
+        return "—", [f'<div class="insp-line">nothing in the {period}</div>']
+    rest = " · ".join(f"{_html_escape(str(n))} {v / tot * 100:.0f}%" for n, v in s.iloc[1:3].items() if v / tot >= 0.005)
+    return s.index[0], [f'<div class="insp-line"><b>{s.iloc[0] / tot * 100:.0f}%</b> of the {period}</div>',
+                        f'<div class="insp-line">{rest}</div>' if rest else ""]
+
+
+def _esr_snap_loads(cat: dict, labels: list, store: dict | None = None) -> dict:
+    """{ESR commodity label: (frame, failed years), or the Exception that stopped it}: the current marketing year and six before it
+    for each commodity, the commodities in parallel. The one store is shared with the Export Sales tab, which reuses what is loaded."""
+    store = store if store is not None else _esr_store()
+
+    def one(label):
+        code = _ESR_COMMODITIES[label][0]
+        current = cat["current"].get(code)
+        if current is None:
+            raise RuntimeError("USDA lists no current marketing year for it")
+        return _esr_history(code, current, _ESR_SNAP_DEPTH, store)
+
+    with ThreadPoolExecutor(max_workers=max(1, len(labels))) as pool:
+        futures = {label: pool.submit(one, label) for label in labels}
+    out = {}
+    for label, fut in futures.items():
+        try:
+            out[label] = fut.result()
+        except Exception as e:
+            out[label] = e
+    return out
+
+
+def _esr_snap_kpis(df: pd.DataFrame, code: int, cat: dict, sc: float) -> dict:
+    """The latest week of every measure of one commodity, all destinations: against last week, a year ago and the 6-year Olympic
+    average (`_esr_compare`), and the week's net sales and weekly exports by destination. Volumes are scaled by `sc`."""
+    df = _esr_named(df, cat)
+    sel_my = int(df["my"].max())
+    last_w = int(df.loc[df["my"] == sel_my, "wk"].max())
+    T = {c: m * sc for c, m in _esr_matrices(df, df).items()}
+    prior6 = [y for y in T["net"].index if y < sel_my][-6:]
+    comp = {c: _esr_compare(T[c], _ESR_FLOW[c], code, sel_my, last_w, prior6) for c in T}
+    rows = df[(df["my"] == sel_my) & (df["wk"] == last_w)]
+    return dict(my=sel_my, wk=last_w, week_end=_esr_first_thu(code, sel_my) + pd.Timedelta(weeks=last_w - 1), comp=comp,
+                net_by=rows.groupby("country")["net"].sum() * sc, exp_by=rows.groupby("country")["exp"].sum() * sc)
+
+
+def _esr_snap_card(title: str, frame: pd.DataFrame, cat: dict, use_bu: bool) -> str:
+    """One commodity's card on the Export Sales snapshot."""
+    code, _month, lb = _ESR_COMMODITIES[_SNAP_ESR[title]]
+    bu_ok = use_bu and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    k = _esr_snap_kpis(frame, code, cat, (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3)
+    kpis = []
+    for c, lab in (("net", f"Net sales · week {k['wk']}"), ("exp", "Weekly exports"), ("out", "Outstanding sales"),
+                   ("acc", "Exports to date"), ("commit", "Total commitments")):
+        cc = k["comp"][c]
+        kpis.append(_snap_kpi(lab, _insp_fmt(cc["cur"], unit), unit,
+                              [_esr_delta_line(cc["cur"], cc["prev"], "vs last week", unit),
+                               _esr_delta_line(cc["cur"], cc["ly"], "vs a year ago", unit),
+                               _esr_delta_line(cc["cur"], cc["oly"], "vs 6-yr Olympic avg", unit)]))
+    name, lines = _snap_top_lines(k["net_by"], "week's net sales")
+    kpis.append(_snap_top("Top buyer · net sales", name, lines))
+    return _snap_card(title, [_esr_my_label(code, k["my"]) + (" · all classes" if title == "Wheat" else ""),
+                              f"week ending {k['week_end']:%b %d}"], kpis)
+
+
+def _ship_snap_card(title: str, frame: pd.DataFrame, cat: dict) -> str:
+    """A product's card on the Inspections snapshot: weekly shipments, because FGIS inspects grain, not meal or oil. These come from
+    the weekly exports of USDA export sales (TMT: products have no bushel weight)."""
+    code = _ESR_COMMODITIES[_SNAP_ESR[title]][0]
+    unit = "TMT"
+    k = _esr_snap_kpis(frame, code, cat, 1e-3)
+    ex, ac = k["comp"]["exp"], k["comp"]["acc"]
+    name, lines = _snap_top_lines(k["exp_by"], "week's shipments")
+    kpis = [
+        _snap_kpi(f"Weekly shipments · week {k['wk']}", _insp_fmt(ex["cur"], unit), unit,
+                  [_esr_delta_line(ex["cur"], ex["prev"], "vs prior week", unit),
+                   _esr_delta_line(ex["cur"], ex["ly"], "vs same week last year", unit),
+                   _esr_delta_line(ex["cur"], ex["oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_kpi(f"{_esr_my_label(code, k['my'])} to date", _insp_fmt(ac["cur"], unit), unit,
+                  [_esr_delta_line(ac["cur"], ac["ly"], "vs last year", unit),
+                   _esr_delta_line(ac["cur"], ac["oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_top("Top destination", name, lines),
+    ]
+    return _snap_card(title, ["Shipments · USDA export sales", f"week ending {k['week_end']:%b %d}"], kpis)
+
+
+def _insp_snap_card(title: str, df: pd.DataFrame, use_bu: bool) -> str:
+    """One grain's card on the Inspections snapshot: the latest FGIS week."""
+    _code, start_month, lb = _INSP_GRAINS[_SNAP_INSP[title]]
+    bu_ok = use_bu and lb is not None
+    unit = "Mbu" if bu_ok else "TMT"
+    dff = df.assign(v=(df["lbs"] / lb / 1e6) if bu_ok else (df["mt"] / 1000.0))
+    M, C = _insp_matrices(df, dff)
+    sel_my = int(df["my"].max())
+    last_w = int(df.loc[df["my"] == sel_my, "my_week"].max())
+    p = _insp_pace(M, C, sel_my, last_w)
+    week_end = _insp_first_thu(sel_my, start_month) + pd.Timedelta(weeks=last_w - 1)
+    wk = dff[(dff["my"] == sel_my) & (dff["my_week"] == last_w)]
+    d_name, d_lines = _snap_top_lines(wk.groupby("dest")["v"].sum(), "week")
+    r_name, r_lines = _snap_top_lines(wk.groupby("region")["v"].sum(), "week")
+    kpis = [
+        _snap_kpi(f"Inspections · week {last_w}", _insp_fmt(p["w_cur"], unit), unit,
+                  [_esr_delta_line(p["w_cur"], p["w_prev"], "vs prior week", unit),
+                   _esr_delta_line(p["w_cur"], p["w_ly"], "vs same week last year", unit),
+                   _esr_delta_line(p["w_cur"], p["w_oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_kpi(f"{sel_my}/{str(sel_my + 1)[-2:]} to date", _insp_fmt(p["c_cur"], unit), unit,
+                  [_esr_delta_line(p["c_cur"], p["c_ly"], "vs last year", unit),
+                   _esr_delta_line(p["c_cur"], p["c_oly"], "vs 6-yr Olympic avg", unit)]),
+        _snap_top("Top destination", d_name, d_lines),
+        _snap_top("Top origin region", r_name, r_lines),
+    ]
+    return _snap_card(title, ["FGIS inspections", f"week ending {week_end:%b %d}"], kpis)
+
+
+def _snap_header(text: str) -> None:
+    st.markdown(
+        f'<div style="margin:14px 0 8px;padding-bottom:8px;border-bottom:2px solid {JSA_CYAN};font-family:Arial,sans-serif;'
+        f'display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">'
+        f'<span style="font-size:27px;font-weight:700;color:{JSA_DARK};letter-spacing:0.2px;line-height:1.2;">{text}</span></div>',
+        unsafe_allow_html=True)
+
+
+def _esr_snapshot(use_bu: bool) -> None:
+    """Export Sales snapshot: corn, soybeans, soybean meal, soybean oil and wheat, the latest report week of each."""
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        st.error(f"**The USDA export-sales service could not be reached.** `{e}` Click **Refresh Data** above to try again.")
+        return
+    with st.spinner("Loading the latest export sales…"):
+        loads = _esr_snap_loads(cat, [_SNAP_ESR[t] for t in _SNAP_ORDER])
+    cards = {}
+    for t in _SNAP_ORDER:
+        got = loads[_SNAP_ESR[t]]
+        if isinstance(got, Exception):
+            cards[t] = _snap_off(t, f"The USDA export-sales service did not answer ({got}).")
+        elif got[0].empty:
+            cards[t] = _snap_off(t, "No export sales are on file yet.")
+        else:
+            cards[t] = _esr_snap_card(t, got[0], cat, use_bu)
+    _snap_header("United States Export Sales: summary snapshot")
+    last = max((c for c in (loads[_SNAP_ESR[t]][0]["week"].max() for t in _SNAP_ORDER
+                            if not isinstance(loads[_SNAP_ESR[t]], Exception) and not loads[_SNAP_ESR[t]][0].empty)), default=None)
+    if last is not None:
+        st.caption(f"Data through the week ending {last:%a %b %d, %Y}. USDA publishes on Thursdays at 8:30 a.m. ET, "
+                   f"for the week that ended the Thursday before.")
+    for t, col in zip(_SNAP_ORDER, st.columns(5)):
+        col.markdown(cards[t], unsafe_allow_html=True)
+    st.markdown(
+        '<div class="insp-note">USDA Foreign Agricultural Service, Export Sales Reporting: the latest report week of each commodity, '
+        'against last week, the same marketing-year week a year ago and the 6-year Olympic average (the highest and lowest of the six '
+        'prior years dropped). Wheat is all classes. Soybean meal and oil marketing years start October 1, so early in the year their '
+        'comparisons rest on a few weeks. Mbu applies to corn, soybeans and wheat; meal and oil have no bushel weight and stay in TMT. '
+        'Switch to Detail for the filters, charts and country table.</div>', unsafe_allow_html=True)
+
+
+def _insp_snapshot(use_bu: bool) -> None:
+    """Inspections snapshot: corn, soybeans and wheat from FGIS, and soybean meal and oil as weekly shipments from export sales."""
+    jobs = [(_INSP_GRAINS[_SNAP_INSP[t]][0], _INSP_GRAINS[_SNAP_INSP[t]][1]) for t in _SNAP_ORDER if t in _SNAP_INSP]
+    ship_labels = [_SNAP_ESR[t] for t in _SNAP_ORDER if t not in _SNAP_INSP]
+    cat, cat_err = None, None
+    try:
+        cat = _esr_catalog()
+    except Exception as e:
+        cat_err = e
+    insp_store, esr_store = _insp_store(), _esr_store()
+    with st.spinner("Loading the latest inspections and shipments…"):
+        with ThreadPoolExecutor(max_workers=2) as pool:           # FGIS and the ESR report are fetched side by side
+            f_insp = pool.submit(_insp_frames, jobs, insp_store)
+            f_ship = pool.submit(_esr_snap_loads, cat, ship_labels, esr_store) if cat is not None else None
+        frames = f_insp.result()
+        ships = f_ship.result() if f_ship is not None else {}
+    cards = {}
+    for t in _SNAP_ORDER:
+        if t in _SNAP_INSP:
+            got = frames[_INSP_GRAINS[_SNAP_INSP[t]][0]]
+            if isinstance(got, Exception):
+                cards[t] = _snap_off(t, f"The FGIS inspections could not be read ({got}).")
+            elif got.empty:
+                cards[t] = _snap_off(t, "No export inspections are on file.")
+            else:
+                cards[t] = _insp_snap_card(t, got, use_bu)
+        else:
+            got = ships.get(_SNAP_ESR[t], cat_err)
+            if isinstance(got, Exception) or got is None:
+                cards[t] = _snap_off(t, f"The USDA export-sales service did not answer ({got}).")
+            elif got[0].empty:
+                cards[t] = _snap_off(t, "No export sales are on file yet.")
+            else:
+                cards[t] = _ship_snap_card(t, got[0], cat)
+    _snap_header("United States Export Inspections: summary snapshot")
+    for t, col in zip(_SNAP_ORDER, st.columns(5)):
+        col.markdown(cards[t], unsafe_allow_html=True)
+    st.markdown(
+        '<div class="insp-note">Corn, soybeans and wheat: USDA Federal Grain Inspection Service export inspections, the latest week '
+        '(FGIS posts on Mondays), against the prior week, the same marketing-year week last year and the 6-year Olympic average. '
+        'FGIS inspects grain, not products, so <b>soybean meal and soybean oil show weekly shipments</b> from USDA export sales (the '
+        'weekly exports of the Thursday report, a week behind inspections). Mbu applies to the grains; meal and oil have no bushel '
+        'weight and stay in TMT. Switch to Detail for the filters, charts and destination table.</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
