@@ -168,7 +168,6 @@ JSA_GREEN = "#4a6741"
 JSA_CYAN  = "#0693e3"
 JSA_DARK  = "#1e2124"
 JSA_CHAR  = "#32373c"
-JSA_MID   = "#2a2f35"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CHART THEME — the light sage palette of the CFTC COT dashboard, shared by every chart
@@ -257,14 +256,7 @@ COMMODITY_CONFIG = {
         "non_us_comps":   ["Brazil","Argentina","Ukraine"],
         "major_comps":    ["US","Brazil","Argentina","Ukraine"],
         "tile_order":     ["US","Brazil","Argentina","Ukraine","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#2e7d32",
-            "Argentina":     "#29b6f6",
-            "Ukraine":       "#fdd835",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
         "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 56.0,   # lbs per bushel of corn
     },
@@ -296,14 +288,7 @@ COMMODITY_CONFIG = {
         "non_us_comps":   ["Brazil","Argentina"],
         "major_comps":    ["US","Brazil","Argentina"],
         "tile_order":     ["US","Brazil","Argentina","TotalNonUS","MajorExporter","ChinaImports"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#2e7d32",
-            "Argentina":     "#29b6f6",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef5350",
-            "ChinaImports":  "#e53935",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
         "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of soybeans
     },
@@ -334,13 +319,7 @@ COMMODITY_CONFIG = {
         "non_us_comps":     ["Brazil","Argentina"],
         "major_comps":      ["US","Brazil","Argentina"],
         "tile_order":       ["US","Brazil","Argentina","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Brazil":        "#43a047",
-            "Argentina":     "#29b6f6",
-            "TotalNonUS":    "#8d6e63",
-            "MajorExporter": "#ef6c00",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
         "country_colors": dict(_CH_COUNTRY),
         "bu_lbs":  None,   # meal is not measured in bushels
     },
@@ -436,20 +415,7 @@ COMMODITY_CONFIG = {
                            "Argentina","Australia","Brazil"],
         "tile_order":     ["US","Canada","EU","Russia","Ukraine","China",
                            "Argentina","Australia","Brazil","TotalNonUS","MajorExporter"],
-        "tile_accents": {
-            "US":            "#f9a825",
-            "Canada":        "#ef5350",
-            "EU":            "#1565c0",
-            "Russia":        "#78909c",
-            "Ukraine":       "#fdd835",
-            "India":         "#ff6d00",
-            "China":         "#b71c1c",
-            "Argentina":     "#29b6f6",
-            "Australia":     "#00897b",
-            "Brazil":        "#43a047",
-            "TotalNonUS":    "#7e57c2",
-            "MajorExporter": "#ef6c00",
-        },
+        "tile_accents": dict(_CH_COUNTRY),             # a tile wears its country's colour from the charts
         "country_colors": dict(_CH_COUNTRY),
         "bu_lbs": 60.0,   # lbs per bushel of wheat
     },
@@ -1328,56 +1294,56 @@ _TABLE_CSS = """
        pinned current-year columns; the table inside is set back to ltr below, so nothing else changes */
     direction: rtl;
     overflow-x: auto; max-height: 580px; overflow-y: auto;
-    border-radius: 6px; border: 1px solid #484f56;
+    border-radius: 8px; border: 1px solid #d7e2dc; background: #ffffff;
     font-family: Arial, sans-serif; font-size: 12.5px;
     line-height: 1.35; margin-bottom: 8px;
 }
 .corn-tbl { direction: ltr; border-collapse: collapse; width: max-content; min-width: 100%; }
 .corn-tbl th {
-    background: #1e2124; color: #ffffff; font-weight: 600;
+    background: #eef3ef; color: #32373c; font-weight: 600;
     text-align: center; padding: 7px 10px; white-space: nowrap;
     position: sticky; top: 0; z-index: 3;
-    border-right: 1px solid #484f56; border-bottom: 2px solid #0d0f11;
+    border-right: 1px solid #d7e2dc; border-bottom: 2px solid #c3d3c9;
 }
-.corn-tbl th.stat-hdr  { background: #2a2f35; color: #ffffff; z-index: 5; }
-.corn-tbl th.cy-hdr    { background: #0555a0; color: #ffffff; }
+.corn-tbl th.stat-hdr  { background: #e2ebe5; color: #32373c; z-index: 5; }
+.corn-tbl th.cy-hdr    { background: #6fa8c4; color: #ffffff; }
 .corn-tbl td {
     padding: 5px 10px; text-align: right; white-space: nowrap;
-    border-bottom: 1px solid #484f56; border-right: 1px solid #484f56;
-    background: #32373c; color: #ffffff;
+    border-bottom: 1px solid #e6eee9; border-right: 1px solid #e6eee9;
+    background: #ffffff; color: #32373c;
 }
-.corn-tbl tr:hover td  { filter: brightness(1.2); }
+.corn-tbl tr:hover td  { filter: brightness(0.96); }
 .corn-tbl td.m-cell    { text-align: left; font-weight: 700;
-                          background: #1e2124 !important; color: #ffffff !important; }
-.corn-tbl td.s-cell    { background: #f4f6f8 !important; color: #000000 !important; }
-.corn-tbl td.p-cell    { background: #f4f6f8 !important; font-weight: 700; }
-.corn-tbl td.left-divider { border-left: 2px solid #0693e3 !important; }
-.corn-tbl th.left-divider { border-left: 2px solid #0693e3 !important; }
-.corn-tbl td.cy-cell   { background: #0693e3 !important; font-weight: 600; color: #ffffff !important; }
+                          background: #eef3ef !important; color: #32373c !important; }
+.corn-tbl td.s-cell    { background: #f3f7f4 !important; color: #32373c !important; }
+.corn-tbl td.p-cell    { background: #f3f7f4 !important; font-weight: 700; }
+.corn-tbl td.left-divider { border-left: 2px solid #6fa8c4 !important; }
+.corn-tbl th.left-divider { border-left: 2px solid #6fa8c4 !important; }
+.corn-tbl td.cy-cell   { background: #e1eff6 !important; font-weight: 700; color: #174d69 !important; }
 .corn-tbl tr.total-row td {
-    background: #232729 !important; font-weight: 700;
-    border-top: 2px solid #0693e3; color: #ffffff;
+    background: #eef3ef !important; font-weight: 700;
+    border-top: 2px solid #6fa8c4; color: #32373c;
 }
-.corn-tbl tr.total-row td.cy-cell { background: #0555a0 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.s-cell  { background: #2a2f35 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.p-cell  { background: #2a2f35 !important; }
-.corn-tbl td.est-cy-cell  { background: #7a5800 !important; color: #ffe082 !important;
-                             font-weight: 600 !important; border-top: 1px dashed #f9a825 !important;
-                             border-bottom: 1px dashed #f9a825 !important; }
-.corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
-.est-badge { background:#7a5800; border:1px dashed #f9a825; padding:2px 8px;
-             border-radius:3px; color:#ffe082; font-weight:600; }
-.corn-tbl th.m1-hdr { background: #3d3100 !important; color: #fdd835 !important; }
-.corn-tbl th.m2-hdr { background: #003d1a !important; color: #00e676 !important; }
-.corn-tbl td.m1-cell { background: #3d3100 !important; color: #fdd835 !important;
-                        font-weight: 600 !important; border-top: 1px dotted #fdd835 !important;
-                        border-bottom: 1px dotted #fdd835 !important; }
-.corn-tbl td.m2-cell { background: #003d1a !important; color: #00e676 !important;
-                        font-weight: 600 !important; border-top: 1px dashed #00e676 !important;
-                        border-bottom: 1px dashed #00e676 !important; }
-.corn-tbl tr.total-row td.m1-cell { background: #2a2200 !important; color: #fdd835 !important; }
-.corn-tbl tr.total-row td.m2-cell { background: #002a10 !important; color: #00e676 !important; }
-.corn-tbl td.m-dash { background: #1e2124 !important; color: #4a5568 !important; }
+.corn-tbl tr.total-row td.cy-cell { background: #cde3ef !important; color: #174d69 !important; }
+.corn-tbl tr.total-row td.s-cell  { background: #e2ebe5 !important; color: #32373c !important; }
+.corn-tbl tr.total-row td.p-cell  { background: #e2ebe5 !important; }
+.corn-tbl td.est-cy-cell  { background: #fdf0c9 !important; color: #7a5200 !important;
+                             font-weight: 700 !important; border-top: 1px dashed #d9a21b !important;
+                             border-bottom: 1px dashed #d9a21b !important; }
+.corn-tbl tr.total-row td.est-cy-cell { background: #f8e3a6 !important; color: #7a5200 !important; }
+.est-badge { background:#fdf0c9; border:1px dashed #d9a21b; padding:2px 8px;
+             border-radius:3px; color:#7a5200; font-weight:600; }
+.corn-tbl th.m1-hdr { background: #f3ecc0 !important; color: #6b5a00 !important; }
+.corn-tbl th.m2-hdr { background: #d6ecdc !important; color: #14632c !important; }
+.corn-tbl td.m1-cell { background: #fbf6d9 !important; color: #6b5a00 !important;
+                        font-weight: 600 !important; border-top: 1px dotted #c8920d !important;
+                        border-bottom: 1px dotted #c8920d !important; }
+.corn-tbl td.m2-cell { background: #e6f4ea !important; color: #14632c !important;
+                        font-weight: 600 !important; border-top: 1px dashed #16a34a !important;
+                        border-bottom: 1px dashed #16a34a !important; }
+.corn-tbl tr.total-row td.m1-cell { background: #f5edbf !important; color: #6b5a00 !important; }
+.corn-tbl tr.total-row td.m2-cell { background: #d3ebdb !important; color: #14632c !important; }
+.corn-tbl td.m-dash { background: #f3f7f4 !important; color: #a8b8ae !important; }
 
 /* ── Vessel Lineup tab ── */
 .vl-kpi-wrap {
@@ -1400,6 +1366,64 @@ _TABLE_CSS = """
 }
 </style>
 """
+
+# ── light surfaces for the tiles, info bars and small tables: the sage look of the charts ──────────────────────────────
+_LT_TINT  = "#f3f7f4"                                  # panel and header tint
+_LT_HEAD  = "#eef3ef"                                  # table header
+_LT_AMBER_BG, _LT_AMBER_BD, _LT_AMBER_TX = "#fdf0c9", "#d9a21b", "#7a5200"      # estimates
+_LT_BLUE_BG, _LT_BLUE_TX = "#e1eff6", "#174d69"        # the current year
+_DIVIDER_HTML = f'<div style="border-top:1px solid {_CH_BORDER};margin:4px 0 16px;"></div>'
+
+
+def _stat_card_html(label: str, value: str, unit: str, accent: str) -> str:
+    """A small centred card (the Forecast and Model 3 tiles): white, sage line, a coloured top edge."""
+    return (f'<div style="background:#ffffff;border:1px solid {_CH_BORDER};border-top:3px solid {accent};'
+            f'border-radius:8px;padding:12px 14px;text-align:center;">'
+            f'<div style="font-size:11px;color:{_CH_MUTED};font-family:Arial;margin-bottom:4px;">{label}</div>'
+            f'<div style="font-size:20px;font-weight:700;color:{_CH_TEXT};font-family:Arial;">{value}</div>'
+            f'<div style="font-size:11px;color:{_CH_MUTED};font-family:Arial;margin-top:2px;">{unit}</div></div>')
+
+
+def _note_bar_html(inner: str, style: str = "") -> str:
+    """A one-line bar in the tint with a sage spine (the pace strip, the info strip)."""
+    return (f'<div style="background:{_LT_TINT};padding:8px 16px;border:1px solid {_CH_BORDER};'
+            f'border-left:3px solid {_CH_SAGE};border-radius:6px;font-family:Arial;font-size:12px;'
+            f'color:{_CH_TEXT};{style}">{inner}</div>')
+
+
+def _info_strip_html(field_label: str, is_import: bool, unit_long: str, my_label: str, cy, ly, oly_label: str) -> str:
+    """The line under the country buttons: what is on show, in which unit, and against which years."""
+    imp = f"&nbsp;<span style='color:{_CH_NEG};font-size:11px;'>(import data)</span>" if is_import else ""
+    cyan = f'color:{JSA_CYAN};font-weight:700;'
+    return _note_bar_html(
+        f'<span>📊 <b>Showing:</b> {field_label}{imp}</span>'
+        f'<span>📐 <b>Units:</b> <span style="{cyan}">{unit_long}</span></span>'
+        f'<span>📅 <b>Marketing Year:</b> {my_label}</span>'
+        f'<span>📅 <b>Current Year (CY):</b> <span style="{cyan}">{cy}</span></span>'
+        f'<span>📅 <b>Last Year (LY):</b> {ly or "N/A"}</span>'
+        f'<span>📈 <b>Olympic Avg (prior yrs):</b> {oly_label}</span>',
+        "padding:9px 18px;font-size:13px;margin:10px 0 6px 0;display:flex;gap:28px;flex-wrap:wrap;")
+
+
+def _table_legend_html(cy, has_estimates: bool, est_how: str = "") -> str:
+    """The key under the info strip: what the colours of the shipment table mean."""
+    def chip(bg, fg, text, extra=""):
+        return f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:3px;{extra}">{text}</span>'
+
+    est_extra = f"border:1px dashed {_LT_AMBER_BD};font-weight:600;"
+    stat_extra = f"border:1px solid {_CH_BORDER};"
+    est = (f'<span>{chip(_LT_AMBER_BG, _LT_AMBER_TX, "EST", est_extra)}'
+           f'&nbsp;Estimate (not yet official{est_how})</span>' if has_estimates else "")
+    return (f'<div style="font-family:Arial;font-size:12px;color:{_CH_MUTED};margin:6px 0 14px 0;display:flex;gap:20px;'
+            f'flex-wrap:wrap;padding:7px 14px;background:{_LT_TINT};border:1px solid {_CH_BORDER};border-radius:5px;">'
+            f'<span>{chip("#6fa8c4", "#ffffff", "CY", "font-weight:600;")}&nbsp;Current Year ({cy})</span>'
+            f'{est}'
+            f'<span>{chip("#d6eddc", "#14632c", "&#9632;")}&nbsp;2 Highest (prior yrs)</span>'
+            f'<span>{chip("#f8d9d9", "#9b1c1c", "&#9632;")}&nbsp;2 Lowest (prior yrs)</span>'
+            f'<span>{chip(_LT_TINT, _CH_MUTED, "&#9632;", stat_extra)}&nbsp;Stat Columns (prior yrs only)</span>'
+            f'<span><b style="color:{_CH_POS};">+x.x%</b>&nbsp;Above reference</span>'
+            f'<span><b style="color:{_CH_NEG};">-x.x%</b>&nbsp;Below reference</span></div>')
+
 
 _TITLE_COMMODITY = {"Soybeans": "Soybean"}      # "United States Soybean Exports", not "Soybeans Exports"
 
@@ -1525,9 +1549,9 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
                 continue
             val = year_data.get(year)
             if year in top2:
-                row += f'<td style="background:#2e7d32;color:#fff;font-weight:600;">{fn(val)}</td>'
+                row += f'<td style="background:#d6eddc;color:#14632c;font-weight:700;">{fn(val)}</td>'
             elif year in bot2:
-                row += f'<td style="background:#c62828;color:#fff;font-weight:600;">{fn(val)}</td>'
+                row += f'<td style="background:#f8d9d9;color:#9b1c1c;font-weight:700;">{fn(val)}</td>'
             else:
                 row += f'<td>{fn(val)}</td>'
 
@@ -2270,8 +2294,8 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
 
 def _pct_chip(val, label) -> str:
     if val is None:
-        return f'<span style="color:#3d4a58;">{label}&thinsp;—</span>'
-    color = "#4caf50" if val >= 0 else "#ef5350"
+        return f'<span style="color:#9aa8a0;">{label}&thinsp;—</span>'
+    color = _CH_POS if val >= 0 else _CH_NEG
     sign  = "+" if val >= 0 else ""
     return f'<span style="color:{color};font-weight:700;">{label}&thinsp;{sign}{val:.1f}%</span>'
 
@@ -2280,29 +2304,32 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
     """
     Render stat tiles as unified per-country cards (Monthly + MYTD seamlessly
     stacked inside one card), all cards flush against each other and centred.
+    White cards on sage lines, the country's chart colour along the top.
     """
     cards_html = ""
     total      = sum(1 for t in tiles if t is not None)
     idx        = 0   # position among non-None tiles
+    line       = _CH_BORDER
+    faint      = "#8a9a90"
 
     for t in tiles:
         if t is None:
             continue
 
         accent   = t.get("accent", JSA_CYAN)
-        imp_note = (' <span style="font-size:9px;color:#8a9aaa;font-weight:400;">'
+        imp_note = (f' <span style="font-size:9px;color:{faint};font-weight:400;">'
                     '(imports)</span>'
                     if t.get("is_import") else "")
 
         # rounded corners only on the outer edges of the first/last card
-        br_tl = "6px" if idx == 0 else "0"
-        br_bl = "6px" if idx == 0 else "0"
-        br_tr = "6px" if idx == total - 1 else "0"
-        br_br = "6px" if idx == total - 1 else "0"
+        br_tl = "8px" if idx == 0 else "0"
+        br_bl = "8px" if idx == 0 else "0"
+        br_tr = "8px" if idx == total - 1 else "0"
+        br_br = "8px" if idx == total - 1 else "0"
         border_radius = f"{br_tl} {br_tr} {br_br} {br_bl}"
 
         # right border only on non-last cards (avoids double border)
-        right_border = "" if idx == total - 1 else "border-right:1px solid #2e353d;"
+        right_border = "" if idx == total - 1 else f"border-right:1px solid {line};"
 
         m_vol = fmt_num(t["monthly_val"], unit_decimals) if t["monthly_val"] is not None else "—"
         c_vol = fmt_num(t["cum_val"],     unit_decimals) if t["cum_val"]     is not None else "—"
@@ -2311,8 +2338,8 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
         my_disp = t["my_label"].replace("USDA (Oct–Sep)", "Oct–Sep")
 
         # EST: the newest month is an estimate, not an official figure (US months Census hasn't published)
-        est_tag = ('&nbsp;<span style="background:#7a5800;border:1px dashed #f9a825;padding:0 4px;'
-                   'border-radius:3px;color:#ffe082;font-size:8px;font-weight:700;">EST</span>'
+        est_tag = (f'&nbsp;<span style="background:{_LT_AMBER_BG};border:1px dashed {_LT_AMBER_BD};padding:0 4px;'
+                   f'border-radius:3px;color:{_LT_AMBER_TX};font-size:8px;font-weight:700;">EST</span>'
                    if t.get("est") else "")
 
         # Aggregates stop at the last month every component reported: say what is still pending
@@ -2320,9 +2347,9 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
         pend_html = ""
         if pend.get("missing"):
             pend_html = (
-                f'<div style="margin:7px 2px 0;padding:4px 5px;background:#2d2615;'
-                f'border:1px dashed #f9a825;border-radius:4px;font-size:9px;line-height:1.4;'
-                f'color:#ffe082;text-align:center;">'
+                f'<div style="margin:7px 2px 0;padding:4px 5px;background:#fff8e6;'
+                f'border:1px dashed {_LT_AMBER_BD};border-radius:4px;font-size:9px;line-height:1.4;'
+                f'color:{_LT_AMBER_TX};text-align:center;">'
                 f'<b>{fmt_num(pend["cum"], unit_decimals)}</b> {unit_short} thru {pend["thru"]}'
                 f'<br>ex-{", ".join(pend["missing"])} {pend["thru"]} (pending)'
                 f'{"<br>incl. US estimate" if pend.get("est") else ""}</div>'
@@ -2330,46 +2357,46 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
 
         card = (
             # ── outer card ──────────────────────────────────────────────────
-            f'<div style="flex:1;min-width:140px;background:#21262c;'
+            f'<div style="flex:1;min-width:140px;background:#ffffff;'
             f'border-top:3px solid {accent};'
-            f'border-bottom:1px solid #2e353d;border-left:1px solid #2e353d;'
+            f'border-bottom:1px solid {line};border-left:1px solid {line};'
             f'{right_border}'
             f'border-radius:{border_radius};overflow:hidden;">'
 
             # ── country header ───────────────────────────────────────────────
             f'<div style="text-align:center;font-size:10.5px;font-weight:700;'
-            f'color:#ffffff;text-transform:uppercase;letter-spacing:0.7px;'
-            f'padding:6px 8px 5px;background:#1a1e22;'
-            f'border-bottom:1px solid #2e353d;">'
+            f'color:{_CH_TEXT};text-transform:uppercase;letter-spacing:0.7px;'
+            f'padding:6px 8px 5px;background:{_LT_TINT};'
+            f'border-bottom:1px solid {line};">'
             f'{t["label"]}{imp_note}</div>'
 
             # ── monthly section ──────────────────────────────────────────────
             f'<div style="padding:9px 10px 8px;text-align:center;">'
-            f'<div style="font-size:8.5px;font-weight:700;color:#5a6878;'
+            f'<div style="font-size:8.5px;font-weight:700;color:{_CH_MUTED};'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">Monthly</div>'
-            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
+            f'<div style="color:{_CH_TEXT};font-size:19px;font-weight:700;'
             f'line-height:1.1;font-family:Arial;">{m_vol}{est_tag}</div>'
-            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'<div style="font-size:9px;color:{faint};margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
-            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}</span></div>'
+            f'<span style="color:{_CH_MUTED};">{t["latest_month"]}</span>'
+            f'&nbsp;<span>{t["cy"]}</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_m"],"LY")}&nbsp;{_pct_chip(t["pct_oly_m"],"Avg")}'
             f'</div></div>'
 
             # ── divider ──────────────────────────────────────────────────────
-            f'<div style="border-top:1px solid #2e353d;margin:0;"></div>'
+            f'<div style="border-top:1px solid {line};margin:0;"></div>'
 
             # ── MYTD section ─────────────────────────────────────────────────
             f'<div style="padding:9px 10px 8px;text-align:center;">'
-            f'<div style="font-size:8.5px;font-weight:700;color:{accent};'
+            f'<div style="font-size:8.5px;font-weight:700;color:{_CH_MUTED};'
             f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">MYTD</div>'
-            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
+            f'<div style="color:{_CH_TEXT};font-size:19px;font-weight:700;'
             f'line-height:1.1;font-family:Arial;">{c_vol}{est_tag}</div>'
-            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'<div style="font-size:9px;color:{faint};margin:2px 0 5px;">'
             f'{unit_short}&nbsp;·&nbsp;'
-            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
-            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({my_disp})</span></div>'
+            f'<span style="color:{_CH_MUTED};">thru&nbsp;{t["latest_month"]}</span>'
+            f'&nbsp;<span>{t["cy"]}&nbsp;({my_disp})</span></div>'
             f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
             f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
             f'</div>{pend_html}</div>'
@@ -2582,7 +2609,7 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
     fn       = lambda v: fmt_num(v, dec) if v is not None else "—"
     has_ytd  = pi.get("has_ytd", False)
     pace_pct = pi.get("pace_pct", 0.0)
-    pace_col = "#4caf50" if pace_pct >= 0 else "#ef5350"
+    pace_col = _CH_POS if pace_pct >= 0 else _CH_NEG
     pace_sign= "+" if pace_pct >= 0 else ""
     adj_pct  = (pi.get("adj_factor", 1.0) - 1.0) * 100.0
     _cy_lbl  = pi.get("cy") or "the current marketing year"
@@ -2592,68 +2619,44 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
 
     cols = st.columns(5)
     metrics = [
-        ("USDA MY Total",          fn(pi["usda_total"]),    unit_short, JSA_CYAN),
+        ("USDA MY Total",          fn(pi["usda_total"]),    unit_short, _CH_BLUE),
         ("YTD Official",
          fn(pi["ytd_actual"]) if has_ytd else "—",
-         unit_short if has_ytd else "",                      "#f9a825"),
+         unit_short if has_ytd else "",                      _CH_TERRA),
         ("YTD Seasonal Expected",
          fn(pi["ytd_expected"]) if has_ytd else "—",
-         unit_short if has_ytd else "",                      "#78909c"),
-        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#fdd835"),
+         unit_short if has_ytd else "",                      "#8fa398"),
+        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, _CH_M1),
         ("Model 2 — Pace Adjusted",
          fn(pi["model2_total"]) if has_ytd else "—",
-         unit_short if has_ytd else "Needs 1st official month", "#00e676"),
+         unit_short if has_ytd else "Needs 1st official month", _CH_M2),
     ]
 
     for col, (label, val, unit, accent) in zip(cols, metrics):
         with col:
-            st.markdown(f"""
-            <div style="background:#1e2124;border-top:3px solid {accent};
-                        border-radius:6px;padding:12px 14px;text-align:center;">
-              <div style="font-size:11px;color:#8a9aaa;font-family:Arial;
-                          margin-bottom:4px;">{label}</div>
-              <div style="font-size:20px;font-weight:700;color:#ffffff;
-                          font-family:Arial;">{val}</div>
-              <div style="font-size:11px;color:{accent};font-family:Arial;
-                          margin-top:2px;">{unit}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(_stat_card_html(label, val, unit, accent), unsafe_allow_html=True)
 
     # Pace strip
     if has_ytd:
         m1_vs_usda = pi["model1_total"] - pi["usda_total"]
         m2_vs_usda = pi["model2_total"] - pi["usda_total"]
-        m1_col = "#4caf50" if m1_vs_usda >= 0 else "#ef5350"
-        m2_col = "#4caf50" if m2_vs_usda >= 0 else "#ef5350"
+        m1_col = _CH_POS if m1_vs_usda >= 0 else _CH_NEG
+        m2_col = _CH_POS if m2_vs_usda >= 0 else _CH_NEG
         m1_sign= "+" if m1_vs_usda >= 0 else ""
         m2_sign= "+" if m2_vs_usda >= 0 else ""
-        st.markdown(f"""
-        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
-                    margin-top:10px;font-family:Arial;font-size:12px;
-                    display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;">
-          <span>📊 <b style="color:#fff;">YTD Pace:</b>
-            <span style="color:{pace_col};font-weight:700;">
-              {pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>
-          <span>🟡 <b style="color:#fdd835;">Model 1</b> implies
-            <span style="color:{m1_col};font-weight:600;">
-              {m1_sign}{fn(m1_vs_usda)} {unit_short}</span>
-            vs USDA total</span>
-          <span>🟢 <b style="color:#00e676;">Model 2</b>
-            ({adj_pct:+.1f}% pace adj) implies
-            <span style="color:{m2_col};font-weight:600;">
-              {m2_sign}{fn(m2_vs_usda)} {unit_short}</span>
-            vs USDA total</span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(_note_bar_html(
+            f'<span>📊 <b>YTD Pace:</b> '
+            f'<span style="color:{pace_col};font-weight:700;">{pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>'
+            f'<span>🟡 <b style="color:{_CH_M1};">Model 1</b> implies '
+            f'<span style="color:{m1_col};font-weight:600;">{m1_sign}{fn(m1_vs_usda)} {unit_short}</span> vs USDA total</span>'
+            f'<span>🟢 <b style="color:{_CH_M2};">Model 2</b> ({adj_pct:+.1f}% pace adj) implies '
+            f'<span style="color:{m2_col};font-weight:600;">{m2_sign}{fn(m2_vs_usda)} {unit_short}</span> vs USDA total</span>',
+            "margin-top:10px;display:flex;gap:28px;flex-wrap:wrap;"), unsafe_allow_html=True)
     else:
-        st.markdown(f"""
-        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
-                    margin-top:10px;font-family:Arial;font-size:12px;color:#8a9aaa;">
-          ℹ️ Pace-Adjusted forecast (Model 2) needs at least one official month of
-          {_cy_lbl}. The first official month normally arrives 5–9 weeks after the
-          marketing year begins; until then Model 1 is the only forecast.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(_note_bar_html(
+            f'ℹ️ Pace-Adjusted forecast (Model 2) needs at least one official month of {_cy_lbl}. The first official '
+            f'month normally arrives 5–9 weeks after the marketing year begins; until then Model 1 is the only forecast.',
+            f"margin-top:10px;color:{_CH_MUTED};"), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2714,7 +2717,7 @@ def _render_ytd_scatter(
     projected   = slope * cy_ytd + intercept
     hist_avg    = float(np.mean(y_arr))
     proj_delta  = projected - hist_avg
-    proj_col    = "#4caf50" if proj_delta >= 0 else "#ef5350"
+    proj_col    = _CH_POS if proj_delta >= 0 else _CH_NEG
     proj_sign   = "+" if proj_delta >= 0 else ""
     fit_label   = "Strong" if r2 >= 0.70 else ("Moderate" if r2 >= 0.40 else "Weak")
 
@@ -2852,50 +2855,22 @@ def _render_ytd_scatter(
 
     c1, c2, c3, _ = st.columns([1, 1, 1, 1])
     with c1:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid {accent_color};'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">Model 3 — MYTD Regression</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{fn(projected)}</div>'
-            f'<div style="font-size:11px;color:{accent_color};font-family:Arial;'
-            f'margin-top:2px;">{unit_short}</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("Model 3 — MYTD Regression", fn(projected), unit_short, accent_color),
+                    unsafe_allow_html=True)
     with c2:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid #78909c;'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">Fit Quality (R²)</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{r2:.3f}</div>'
-            f'<div style="font-size:11px;color:#78909c;font-family:Arial;'
-            f'margin-top:2px;">{fit_label}</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("Fit Quality (R²)", f"{r2:.3f}", fit_label, "#8fa398"), unsafe_allow_html=True)
     with c3:
-        st.markdown(
-            f'<div style="background:#1e2124;border-top:3px solid #f9a825;'
-            f'border-radius:6px;padding:12px 14px;text-align:center;">'
-            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
-            f'margin-bottom:4px;">MYTD Thru / Sample</div>'
-            f'<div style="font-size:20px;font-weight:700;color:#fff;'
-            f'font-family:Arial;">{ytd_thru}</div>'
-            f'<div style="font-size:11px;color:#f9a825;font-family:Arial;'
-            f'margin-top:2px;">{n} prior years</div></div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(_stat_card_html("MYTD Thru / Sample", ytd_thru, f"{n} prior years", _CH_TERRA),
+                    unsafe_allow_html=True)
 
     st.plotly_chart(fig, use_container_width=True)
 
     # Context note
     st.markdown(
-        f'<div style="font-family:Arial;font-size:11px;color:#5a6878;'
+        f'<div style="font-family:Arial;font-size:11px;color:{_CH_MUTED};'
         f'padding:4px 0 12px 2px;">'
         f'Each dot = one prior marketing year positioned at its cumulative '
-        f'shipments through <b style="color:#8a9aaa;">{ytd_thru}</b> (x-axis) '
+        f'shipments through <b style="color:{_CH_TEXT};">{ytd_thru}</b> (x-axis) '
         f'vs its full MY total (y-axis). The OLS line projects where the '
         f'current year\'s MYTD of <b style="color:{accent_color};">'
         f'{fn(cy_ytd)} {unit_short}</b> implies a final total of '
@@ -2983,10 +2958,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                                      commodity=commodity)
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Snapshot Chart ────────────────────────────────────────────────────
     st.markdown("### 📸 Export Snapshot — All Countries")
@@ -3165,60 +3137,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     _fc_lookup      = f"{field}_Local" if _is_local_field else field
     _usda_saved     = forecast_cfg.get((commodity, _fc_lookup))   # Excel default, may be None
 
-    # ── Info strip ────────────────────────────────────────────────────────
+    # ── Info strip and legend ─────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
-    flow_type = "Import" if is_import_field else "Export"
-    st.markdown(f"""
-    <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
-                margin:10px 0 6px 0;font-family:Arial;font-size:13px;
-                display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
-                border-left:3px solid {JSA_GREEN};">
-        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}
-          {"&nbsp;<span style='color:#e57373;font-size:11px;'>(import data)</span>"
-           if is_import_field else ""}</span>
-        <span>📐 <b style="color:#fff;">Units:</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
-        <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
-        <span>📅 <b style="color:#fff;">Current Year (CY):</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{cy}</span></span>
-        <span>📅 <b style="color:#fff;">Last Year (LY):</b> {ly or "N/A"}</span>
-        <span>📈 <b style="color:#fff;">Olympic Avg (prior yrs):</b> {oly_label}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Legend ────────────────────────────────────────────────────────────
-    # Use inline styles for EST badge — CSS class (.est-badge) lives inside
-    # _TABLE_CSS which is injected with the table, not available yet here.
-    _est_badge_style = (
-        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
-        "border-radius:3px;color:#ffe082;font-weight:600;"
-    )
+    st.markdown(_info_strip_html(field_label, is_import_field, unit_long, my_label, cy, ly, oly_label),
+                unsafe_allow_html=True)
     _est_how = (" — USDA export shipments scaled to Census"
                 if field == "US" and commodity in _US_ESR_CODE else "")
-    _est_legend_item = (
-        f'<span><span style="{_est_badge_style}">EST</span>'
-        f'&nbsp;Estimate (not yet official{_est_how})</span>'
-        if has_estimates else ""
-    )
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
-        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
-        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
-        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
-        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
-        f'{_est_legend_item}'
-        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
-        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
-        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
-        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
-        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
-        f'&nbsp;Above reference&nbsp;'
-        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
-        f'&nbsp;Below reference</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_table_legend_html(cy, has_estimates, _est_how), unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Soybeans / Meal: all components share USDA Oct-Sep → safe to auto-derive
@@ -3275,10 +3200,10 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 _src_lbl = _wasde_source_label(cy)
                 st.markdown(
                     f'<div style="font-family:Arial;font-size:13px;">'
-                    f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                    f'<span style="font-size:24px;font-weight:700;color:#1e2124;">'
+                    f'<span style="color:{_CH_MUTED};">WASDE {cy} MY Total ({unit_short})</span><br>'
+                    f'<span style="font-size:24px;font-weight:700;color:{_CH_TEXT};">'
                     f'{usda_total:,.0f}</span><br>'
-                    f'<span style="color:#555;font-size:11px;">{_src_lbl}</span>'
+                    f'<span style="color:{_CH_MUTED};font-size:11px;">{_src_lbl}</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -3655,10 +3580,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     )
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Wheat Snapshot Chart ──────────────────────────────────────────────
     st.markdown("### 📸 Export Snapshot — All Countries")
@@ -3779,52 +3701,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)
 
-    # ── Info strip ───────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
-                margin:10px 0 6px 0;font-family:Arial;font-size:13px;
-                display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
-                border-left:3px solid {JSA_GREEN};">
-        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}</span>
-        <span>📐 <b style="color:#fff;">Units:</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
-        <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
-        <span>📅 <b style="color:#fff;">Current Year (CY):</b>
-              <span style="color:{JSA_CYAN};font-weight:700;">{cy}</span></span>
-        <span>📅 <b style="color:#fff;">Last Year (LY):</b> {ly or "N/A"}</span>
-        <span>📈 <b style="color:#fff;">Olympic Avg (prior yrs):</b> {oly_label}</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Legend ───────────────────────────────────────────────────────────
-    _est_badge_style = (
-        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
-        "border-radius:3px;color:#ffe082;font-weight:600;"
-    )
-    _est_legend_w_item = (
-        f'<span><span style="{_est_badge_style}">EST</span>'
-        f'&nbsp;Estimate (not yet official)</span>'
-        if has_estimates else ""
-    )
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
-        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
-        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
-        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
-        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
-        f'{_est_legend_w_item}'
-        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
-        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
-        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
-        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
-        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
-        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
-        f'&nbsp;Above reference&nbsp;'
-        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
-        f'&nbsp;Below reference</div>',
-        unsafe_allow_html=True,
-    )
+    # ── Info strip and legend ────────────────────────────────────────────
+    st.markdown(_info_strip_html(field_label, False, unit_long, my_label, cy, ly, oly_label),
+                unsafe_allow_html=True)
+    st.markdown(_table_legend_html(cy, has_estimates), unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Wheat aggregate tabs (TotalNonUS, MajorExporter) are skipped — too many
@@ -3862,10 +3742,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                     _src_lbl_w = _wasde_source_label(cy, use_ty=False)
                     st.markdown(
                         f'<div style="font-family:Arial;font-size:13px;">'
-                        f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
-                        f'<span style="font-size:24px;font-weight:700;color:#1e2124;">'
+                        f'<span style="color:{_CH_MUTED};">WASDE {cy} MY Total ({unit_short})</span><br>'
+                        f'<span style="font-size:24px;font-weight:700;color:{_CH_TEXT};">'
                         f'{usda_total_w:,.0f}</span><br>'
-                        f'<span style="color:#555;font-size:11px;">{_src_lbl_w}</span>'
+                        f'<span style="color:{_CH_MUTED};font-size:11px;">{_src_lbl_w}</span>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
@@ -4318,10 +4198,7 @@ def _run_china_imports_tab(logo_b64=None):
     ))
 
     # ── Divider ───────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── MYTD Stat Tiles ───────────────────────────────────────────────────────
     # Per-partner MYTD totals for current MY vs Olympic avg and vs LY
@@ -4363,26 +4240,26 @@ def _run_china_imports_tab(logo_b64=None):
         pct_ly  = ((cy_val / ly_val  - 1) * 100) if cy_val and ly_val  else None
 
         def _pct_color(v):
-            return "#4caf50" if v is not None and v >= 0 else "#ef5350"
+            return _CH_POS if v is not None and v >= 0 else _CH_NEG
 
         def _fmt(v, dec=0):
             return f"{v:,.{dec}f}" if v is not None else "—"
 
-        color = _PARTNER_COLORS.get(partner, "#8a9aaa")
+        color = _PARTNER_COLORS.get(partner, "#8fa398")
         tiles_html += f"""
-        <div style="background:#1e2124;border:1px solid #2e353d;border-top:3px solid {color};
-                    border-radius:6px;padding:12px 16px;min-width:160px;flex:1;">
-          <div style="font-family:Arial;font-size:11px;font-weight:700;color:#8a9aaa;
+        <div style="background:#ffffff;border:1px solid {_CH_BORDER};border-top:3px solid {color};
+                    border-radius:8px;padding:12px 16px;min-width:160px;flex:1;">
+          <div style="font-family:Arial;font-size:11px;font-weight:700;color:{_CH_MUTED};
                       text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
             {partner}
           </div>
-          <div style="font-family:Arial;font-size:18px;font-weight:700;color:#fff;
-                      margin-bottom:4px;">{_fmt(cy_val)} <span style="font-size:11px;color:#8a9aaa;">TMT</span></div>
+          <div style="font-family:Arial;font-size:18px;font-weight:700;color:{_CH_TEXT};
+                      margin-bottom:4px;">{_fmt(cy_val)} <span style="font-size:11px;color:{_CH_MUTED};">TMT</span></div>
           <div style="display:flex;gap:10px;margin-top:4px;">
-            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_avg)};">
+            <span style="font-family:Arial;font-size:11px;font-weight:600;color:{_pct_color(pct_avg)};">
               Avg: {('+' if pct_avg and pct_avg>=0 else '')}{_fmt(pct_avg,1)}%
             </span>
-            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_ly)};">
+            <span style="font-family:Arial;font-size:11px;font-weight:600;color:{_pct_color(pct_ly)};">
               LY: {('+' if pct_ly and pct_ly>=0 else '')}{_fmt(pct_ly,1)}%
             </span>
           </div>
@@ -4393,10 +4270,7 @@ def _run_china_imports_tab(logo_b64=None):
         f'{tiles_html}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
 
     # ── Chart 1: Seasonal monthly imports (MY-ordered x-axis) ────────────────
     st.markdown(f"### 📈 Monthly Imports — Seasonal Comparison (TMT)")
@@ -4521,26 +4395,27 @@ def _run_china_imports_tab(logo_b64=None):
     )
 
     # Highlight current MY column
-    def _cell(val, is_cur=False, bold=False):
+    def _cell(val, is_cur=False, bold=False, row_bg="#ffffff", cur_bg=_LT_BLUE_BG):
         fmt = f"{val:,.0f}" if val else "—"
-        bg  = "#0693e3" if is_cur else "#32373c"
+        bg  = cur_bg if is_cur else row_bg
+        fg  = _LT_BLUE_TX if is_cur else _CH_TEXT
         fw  = "700" if (is_cur or bold) else "400"
         return (f'<td style="padding:5px 10px;text-align:right;white-space:nowrap;'
-                f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-                f'background:{bg};color:#fff;font-weight:{fw};">{fmt}</td>')
+                f'border-bottom:1px solid #e6eee9;border-right:1px solid #e6eee9;'
+                f'background:{bg};color:{fg};font-weight:{fw};">{fmt}</td>')
 
     hdr_cells = "".join(
-        f'<th style="background:{"#0555a0" if col==cur_my_label else "#1e2124"};'
-        f'color:#fff;font-weight:600;text-align:center;padding:7px 10px;'
-        f'white-space:nowrap;border-right:1px solid #484f56;'
-        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;">'
+        f'<th style="background:{"#6fa8c4" if col==cur_my_label else _LT_HEAD};'
+        f'color:{"#ffffff" if col==cur_my_label else _CH_TEXT};font-weight:600;text-align:center;padding:7px 10px;'
+        f'white-space:nowrap;border-right:1px solid {_CH_BORDER};'
+        f'border-bottom:2px solid #c3d3c9;font-family:Arial;font-size:12px;">'
         f'{col}</th>'
         for col in my_col_order
     )
     hdr = (
-        f'<th style="background:#2a2f35;color:#fff;font-weight:600;text-align:left;'
-        f'padding:7px 10px;white-space:nowrap;border-right:1px solid #484f56;'
-        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;'
+        f'<th style="background:#e2ebe5;color:{_CH_TEXT};font-weight:600;text-align:left;'
+        f'padding:7px 10px;white-space:nowrap;border-right:1px solid {_CH_BORDER};'
+        f'border-bottom:2px solid #c3d3c9;font-family:Arial;font-size:12px;'
         f'position:sticky;left:0;z-index:3;">Country</th>'
         + hdr_cells
     )
@@ -4548,41 +4423,41 @@ def _run_china_imports_tab(logo_b64=None):
     tbl_rows = ""
     totals   = {col: 0.0 for col in my_col_order}
     for i, (partner, row) in enumerate(ann_pivot.iterrows()):
-        bg = "#32373c" if i % 2 == 0 else "#2a2f35"
+        bg = "#ffffff" if i % 2 == 0 else "#f8faf8"
         cells = ""
         for col in my_col_order:
             v = float(row.get(col, 0))
             totals[col] += v
             is_cur = (col == cur_my_label)
-            cells += _cell(v, is_cur=is_cur)
+            cells += _cell(v, is_cur=is_cur, row_bg=bg)
         tbl_rows += (
             f'<tr>'
             f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
-            f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-            f'background:{bg};color:#fff;font-weight:700;font-family:Arial;'
+            f'border-bottom:1px solid #e6eee9;border-right:1px solid {_CH_BORDER};'
+            f'background:{_LT_HEAD};color:{_CH_TEXT};font-weight:700;font-family:Arial;'
             f'font-size:12px;position:sticky;left:0;z-index:2;">{partner}</td>'
             f'{cells}</tr>'
         )
 
     # Total row
     tot_cells = "".join(
-        _cell(totals[col], is_cur=(col == cur_my_label), bold=True)
+        _cell(totals[col], is_cur=(col == cur_my_label), bold=True, row_bg=_LT_HEAD, cur_bg="#cde3ef")
         for col in my_col_order
     )
     tbl_rows += (
-        f'<tr style="border-top:2px solid #0693e3;">'
+        f'<tr style="border-top:2px solid #6fa8c4;">'
         f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
-        f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
-        f'background:#232729;color:#fff;font-weight:700;font-family:Arial;'
+        f'border-bottom:1px solid #e6eee9;border-right:1px solid {_CH_BORDER};'
+        f'background:#e2ebe5;color:{_CH_TEXT};font-weight:700;font-family:Arial;'
         f'font-size:12px;position:sticky;left:0;z-index:2;">Total</td>'
         f'{tot_cells}</tr>'
     )
 
     st.markdown(
-        f'<div style="overflow-x:auto;border-radius:6px;border:1px solid #484f56;'
+        f'<div style="overflow-x:auto;border-radius:8px;border:1px solid {_CH_BORDER};background:#ffffff;'
         f'font-family:Arial;font-size:12px;margin-bottom:12px;">'
         f'<table style="border-collapse:collapse;width:max-content;min-width:100%;">'
-        f'<thead><tr style="background:#1e2124;">{hdr}</tr></thead>'
+        f'<thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>'
         f'<tbody>{tbl_rows}</tbody>'
         f'</table></div>',
         unsafe_allow_html=True,
@@ -4603,34 +4478,34 @@ def _render_my_reference_tab():
     def _ref_table(title, rows):
         """rows: list of (Country, Hemisphere, USDA MY, Local MY)"""
         hdr = "".join(
-            f'<th style="padding:9px 16px;text-align:left;color:#aab4c0;'
+            f'<th style="padding:9px 16px;text-align:left;color:{_CH_MUTED};'
             f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
-            f'border-bottom:2px solid #0693e3;white-space:nowrap;">{h}</th>'
+            f'border-bottom:2px solid #6fa8c4;white-space:nowrap;">{h}</th>'
             for h in ["Country", "Hemisphere", "USDA MY", "Local MY"]
         )
         tbl_rows = ""
         for i, (country, hemi, usda_my, local_my) in enumerate(rows):
-            bg = "#21262c" if i % 2 == 0 else "#1d2227"
+            bg = "#ffffff" if i % 2 == 0 else "#f8faf8"
             same = local_my == usda_my
             local_cell = (
                 local_my if same else
-                f'<b style="color:#f9a825;">{local_my}</b>'
+                f'<b style="color:#b45309;">{local_my}</b>'
             )
             tbl_rows += (
                 f'<tr style="background:{bg};">'
-                f'<td style="padding:8px 16px;color:#e0e8f0;font-size:12.5px;">{country}</td>'
-                f'<td style="padding:8px 16px;color:#8a9aaa;font-size:12.5px;">{hemi}</td>'
-                f'<td style="padding:8px 16px;color:#d0d8e0;font-size:12.5px;">{usda_my}</td>'
-                f'<td style="padding:8px 16px;font-size:12.5px;">{local_cell}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_TEXT};font-size:12.5px;border-bottom:1px solid #e6eee9;">{country}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_MUTED};font-size:12.5px;border-bottom:1px solid #e6eee9;">{hemi}</td>'
+                f'<td style="padding:8px 16px;color:{_CH_TEXT};font-size:12.5px;border-bottom:1px solid #e6eee9;">{usda_my}</td>'
+                f'<td style="padding:8px 16px;font-size:12.5px;color:{_CH_TEXT};border-bottom:1px solid #e6eee9;">{local_cell}</td>'
                 f'</tr>'
             )
         return f"""
         <div style="font-family:Arial;margin-bottom:24px;">
-          <div style="font-size:13px;font-weight:700;color:#fff;
+          <div style="font-size:13px;font-weight:700;color:{_CH_TEXT};
                       margin-bottom:8px;">{title}</div>
-          <div style="border-radius:6px;border:1px solid #2e353d;overflow:hidden;">
+          <div style="border-radius:8px;border:1px solid {_CH_BORDER};overflow:hidden;background:#ffffff;">
             <table style="border-collapse:collapse;width:100%;">
-              <thead><tr style="background:#151a1f;">{hdr}</tr></thead>
+              <thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>
               <tbody>{tbl_rows}</tbody>
             </table>
           </div>
@@ -4638,10 +4513,10 @@ def _render_my_reference_tab():
         """
 
     st.markdown(
-        '<p style="font-family:Arial;font-size:12.5px;color:#8a9aaa;margin-bottom:20px;">'
+        f'<p style="font-family:Arial;font-size:12.5px;color:{_CH_MUTED};margin-bottom:20px;">'
         'Local MY (highlighted in amber) differs from the USDA standard. '
         'Toggle <em>Local MY</em> off on any commodity tab to align all countries '
-        'to <b style="color:#0693e3;">USDA Oct–Sep</b> for cross-country comparisons.'
+        f'to <b style="color:{JSA_CYAN};">USDA Oct–Sep</b> for cross-country comparisons.'
         '</p>',
         unsafe_allow_html=True,
     )
@@ -4691,13 +4566,13 @@ def _render_my_reference_tab():
 
     # ── USDA PSD link ─────────────────────────────────────────────────────
     st.markdown(f"""
-    <div style="background:#1a1e22;border:1px solid #2e353d;
+    <div style="background:{_LT_TINT};border:1px solid {_CH_BORDER};
                 border-left:4px solid {JSA_CYAN};border-radius:6px;
                 padding:12px 18px;font-family:Arial;margin-top:4px;">
-      <span style="color:#fff;font-weight:700;font-size:12.5px;">
+      <span style="color:{_CH_TEXT};font-weight:700;font-size:12.5px;">
         🌐 USDA PSD Database
       </span>
-      <span style="color:#8a9aaa;font-size:12px;margin:0 12px;">
+      <span style="color:{_CH_MUTED};font-size:12px;margin:0 12px;">
         — Authoritative source for marketing year definitions &amp; export data.
       </span>
       <a href="https://apps.fas.usda.gov/psdonline/app/index.html#/app/downloads"
