@@ -4952,9 +4952,9 @@ _INSP_CSS = """
 .insp-line { color:#5f7267; font-size:.78rem; margin-top:5px; }
 .insp-note { color:#5f7267; font-size:.78rem; line-height:1.5; margin-top:8px; }
 /* the filter panel of the Inspections and Export Sales tabs: always open, tinted, with a sage spine */
-.st-key-insp_filters, .st-key-esr_filters { background:#f3f7f4; border:1px solid #c9d8cf !important;
+.st-key-insp_filters, .st-key-esr_filters, .st-key-flash_filters { background:#f3f7f4; border:1px solid #c9d8cf !important;
     border-left:5px solid #5e7164 !important; border-radius:10px; padding:2px 8px 8px; margin-bottom:4px; }
-.st-key-insp_reset, .st-key-esr_reset { display:flex; justify-content:flex-end; }
+.st-key-insp_reset, .st-key-esr_reset, .st-key-flash_reset { display:flex; justify-content:flex-end; }
 .fp-title { color:#32373c; font-size:.92rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
 .fp-sub { color:#5f7267; font-size:.82rem; margin-left:12px; }
 .fp-group { color:#5f7267; font-size:.74rem !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; margin:8px 0 calc(1rem - 8px) !important; }
@@ -7282,6 +7282,229 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FLASH SALES TAB
+# Every USDA daily flash export sale (100,000 t or more of one commodity to one destination, soybean oil 20,000 t),
+# one row per announcement in Snowflake JSA.FLASH_SALES.ALL_SALES. Filled by flash_archive.py of the China
+# soybean tracker (FAS emails, daily) plus the desk's USDA Flash.xlsx history (marketing year derived).
+# ─────────────────────────────────────────────────────────────────────────────
+_FLASH_ORDER = ["Corn", "Soybeans", "Soybean Meal", "Soybean Oil", "Wheat", "Sorghum"]
+_FLASH_MBU = {"Corn": 0.039368, "Soybeans": 0.036744, "Wheat": 0.036744, "Sorghum": 0.039368}   # meal, oil: no bushel unit
+_FLASH_MY_MONTH = {"Wheat": 6, "Soybean Meal": 10, "Soybean Oil": 10}                          # every other marketing year starts Sep 1
+_FLASH_ADJ = {"switch", "cancel", "reduction", "destination_change", "rebooked", "revision"}   # corrections, kept out of the totals
+_FLASH_RESET_KEYS = ("flash_com", "flash_my_", "flash_per", "flash_dst_", "flash_freq", "flash_topn")
+_FLASH_PERIODS = {"Everything selected": None, "Last 30 days": 30, "Last 90 days": 90, "Last 12 months": 365}
+
+
+class _FlashNotAvailable(Exception):
+    """The archive view is missing, empty, or this app's Snowflake role may not read it. Raised so st.cache_data never caches it."""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_flash_sales() -> pd.DataFrame:
+    """Every archived flash sale: date, ESR, commodity, tonnes, destination, marketing year, flags, source (+ adj, tmt)."""
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT SALE_DATE, ESR, COMMODITY, MT, DESTINATION, MARKETING_YEAR, FLAGS, SOURCE "
+                        "FROM JSA.FLASH_SALES.ALL_SALES")
+            rows = cur.fetchall()
+        except Exception as e:
+            msg = str(e).lower()
+            if "does not exist" in msg or "not authorized" in msg or "insufficient privileges" in msg:
+                raise _FlashNotAvailable(str(e).splitlines()[0])
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+            continue
+        if not rows:
+            raise _FlashNotAvailable("JSA.FLASH_SALES.ALL_SALES is empty")
+        df = pd.DataFrame(rows, columns=["date", "esr", "commodity", "mt", "dest", "my", "flags", "source"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["mt"] = df["mt"].astype(float)
+        df["tmt"] = df["mt"] / 1000.0
+        df["flags"] = df["flags"].fillna("")
+        df["dest"] = df["dest"].fillna("—").replace("", "—")
+        df["adj"] = df["flags"].apply(lambda f: bool(_FLASH_ADJ & set(str(f).split(","))))
+        return df
+
+
+def _flash_my_start(com: str, my: str) -> pd.Timestamp:
+    return pd.Timestamp(int(my[:4]), _FLASH_MY_MONTH.get(com, 9), 1)
+
+
+def _run_flash_sales_tab(use_bushels: bool):
+    st.markdown(_INSP_CSS, unsafe_allow_html=True)
+    try:
+        df = _load_flash_sales()
+    except _FlashNotAvailable as e:
+        st.info("The flash-sale archive is not readable by this dashboard yet. It lives in Snowflake `JSA.FLASH_SALES`; "
+                "the dashboard's role needs read access to it (see the grant note in the China tracker's README). "
+                f"Detail: {e}")
+        return
+    except Exception as e:
+        st.error(f"**The flash-sale archive could not be read.** `{e}` Click **Refresh Data** above to try again.")
+        return
+
+    latest = df["date"].max()
+    present = set(df["commodity"])
+    coms = [c for c in _FLASH_ORDER if c in present] + sorted(present - set(_FLASH_ORDER))
+
+    with st.container(border=True, key="flash_filters"):
+        top_l, top_r = st.columns([5, 1.1])
+        top_l.markdown('<span class="fp-title">Filters</span><span class="fp-sub">apply to every tile, chart and table below</span>',
+                       unsafe_allow_html=True)
+        top_r.button("Reset filters", key="flash_reset", on_click=_fp_reset, args=(_FLASH_RESET_KEYS,))
+        _fp_group("What to show")
+        c_com, c_my, c_per, c_dst = st.columns([1.2, 1.1, 1.3, 2.6])
+        com = c_com.selectbox("Commodity", ["All commodities"] + coms, key="flash_com")
+        single = com != "All commodities"
+        sub = df[df["commodity"] == com] if single else df
+        years = sorted((y for y in sub["my"].dropna().unique() if y), reverse=True)
+        my = c_my.selectbox("Marketing year", ["All years"] + years, key=f"flash_my_{com}")
+        per = c_per.selectbox("Period", list(_FLASH_PERIODS), key="flash_per")
+        f = sub if my == "All years" else sub[sub["my"] == my]
+        days = _FLASH_PERIODS[per]
+        if days:
+            f = f[f["date"] > latest - pd.Timedelta(days=days)]
+        dest_opts = list(f.loc[~f["adj"]].groupby("dest")["mt"].sum().sort_values(ascending=False).index)
+        picked = c_dst.multiselect("Destination", dest_opts, key=f"flash_dst_{com}_{my}_{per}", placeholder="All destinations")
+        if picked:
+            f = f[f["dest"].isin(picked)]
+        chips = [x for x in (com if single else "", my if my != "All years" else "", per if days else "") if x] + picked
+        st.markdown(_fp_chips(chips, "Showing every flash sale on file."), unsafe_allow_html=True)
+
+    adj, g = f[f["adj"]], f[~f["adj"]].copy()
+    if g.empty:
+        st.info("No flash sales match those filters.")
+        return
+
+    factor = _FLASH_MBU.get(com) if (use_bushels and single) else None
+    unit = "Mbu" if factor else "TMT"
+    dec = 1 if factor else 0
+    g["vol"] = g["tmt"] * (factor or 1.0)
+    total = g["vol"].sum()
+    if use_bushels and not factor:
+        st.caption("Million bushels apply to one grain at a time (corn, soybeans, wheat, sorghum); this view stays in TMT.")
+
+    # ── tiles ────────────────────────────────────────────────────────────────────────────────────
+    prior_line = _insp_delta_line(None, "no earlier year to compare")
+    if days:
+        p_end, p_start = latest - pd.Timedelta(days=365), latest - pd.Timedelta(days=365 + days)
+        pb = sub[(sub["date"] > p_start) & (sub["date"] <= p_end) & ~sub["adj"]]
+        if picked:
+            pb = pb[pb["dest"].isin(picked)]
+        if my != "All years":
+            pb = pb.iloc[0:0]          # a fixed marketing year has no 'same days last year'
+        pv = pb["tmt"].sum() * (factor or 1.0)
+        if pv > 0:
+            prior_line = _insp_delta_line(_insp_pct(total, pv), f"vs the same {days} days a year earlier ({pv:,.{dec}f} {unit})")
+    big = g.loc[g["vol"].idxmax()]
+    by_dest = g.groupby("dest")["vol"].sum().sort_values(ascending=False)
+    named = by_dest.drop(labels=["Unknown Destinations", "—"], errors="ignore")
+    unk = float(by_dest.get("Unknown Destinations", 0.0))
+    china = float(by_dest.get("China", 0.0))
+    t1, t2, t3, t4 = st.columns(4)
+    t1.markdown(_insp_tile("Flash sales reported", f"{total:,.{dec}f}", unit,
+                           [f'<div class="insp-line">{len(g):,} announcements, through {latest:%b %d, %Y}</div>', prior_line]),
+                unsafe_allow_html=True)
+    t2.markdown(_insp_tile("Largest single sale", f"{big['vol']:,.{dec}f}", unit,
+                           [f'<div class="insp-line">{_html_escape(big["commodity"])} to {_html_escape(big["dest"])}</div>',
+                            f'<div class="insp-line">{big["date"]:%b %d, %Y}</div>']), unsafe_allow_html=True)
+    if len(named):
+        t3.markdown(_insp_tile("Largest named destination", _html_escape(named.index[0]), "",
+                               [f'<div class="insp-line">{named.iloc[0]:,.{dec}f} {unit}, {named.iloc[0] / total * 100:.0f}% of volume</div>']),
+                    unsafe_allow_html=True)
+    t4.markdown(_insp_tile("Unknown destinations", f"{unk / total * 100:.0f}%", "of volume",
+                           [f'<div class="insp-line">{unk:,.{dec}f} {unit}</div>',
+                            f'<div class="insp-line">China: {china / total * 100:.0f}% ({china:,.{dec}f} {unit})</div>']),
+                unsafe_allow_html=True)
+
+    # ── charts ───────────────────────────────────────────────────────────────────────────────────
+    _insp_sec("Volume over time")
+    freq = st.segmented_control("Group by", ["Weekly", "Monthly"], default="Weekly", key="flash_freq") or "Weekly"
+    g["bucket"] = g["date"].dt.to_period("W" if freq == "Weekly" else "M").dt.start_time
+    lead = list(by_dest.head(7).index)
+    g["seg"] = g["dest"].where(g["dest"].isin(lead), "All other")
+    ts = g.groupby(["bucket", "seg"])["vol"].sum().reset_index()
+    fig = go.Figure()
+    for i, name in enumerate(lead + ["All other"]):
+        s = ts[ts["seg"] == name]
+        if s.empty:
+            continue
+        col = _CH_MIST if name == "All other" else (_CH_COUNTRY.get(name) if name in _CH_COUNTRY else _CH_PAL[i % 11])
+        fig.add_trace(go.Bar(x=s["bucket"], y=s["vol"], name=name, marker_color=col))
+    fig.update_layout(barmode="stack")
+    _insp_style(fig, 380, logo="x", y_title=unit)
+    fig.update_yaxes(tickformat=",")
+    _insp_plot(fig, "flash_ts")
+
+    left, right = st.columns(2)
+    with left:
+        top_n = st.slider("Destinations shown", 5, 20, 10, key="flash_topn")
+        show = by_dest.head(top_n)
+        fig2 = go.Figure(go.Bar(y=show.index, x=show.values, orientation="h", marker_color=_CH_BLUE,
+                                text=[f"{v:,.{dec}f}" for v in show.values], textposition="outside",
+                                textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        _insp_style(fig2, max(340, len(show) * 32 + 60), title=f"Top destinations ({unit})", legend=False, hover="closest")
+        fig2.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
+        fig2.update_xaxes(tickformat=",")
+        _insp_plot(fig2, "flash_dest")
+    with right:
+        if single:
+            base = sub[~sub["adj"]]
+            if picked:
+                base = base[base["dest"].isin(picked)]
+            data_start = df["date"].min() - pd.Timedelta(days=7)
+            fig3 = go.Figure()
+            mys = sorted(m for m in base["my"].dropna().unique() if m and _flash_my_start(com, m) >= data_start)[-6:]
+            ys = [int(m[:4]) for m in mys]
+            for m in mys:
+                s = base[base["my"] == m].sort_values("date")
+                x = (s["date"] - _flash_my_start(com, m)).dt.days
+                y = (s["tmt"] * (factor or 1.0)).cumsum()
+                col, wid, _ = _year_style(int(m[:4]), max(ys), max(ys) - 1, ys)
+                fig3.add_trace(go.Scatter(x=x, y=y, name=m, mode="lines", line=dict(color=col, width=wid, shape="hv")))
+            _insp_style(fig3, max(340, min(len(show), top_n) * 32 + 60), title=f"Cumulative flash sales by marketing year ({unit})",
+                        x_title="Days into the marketing year", hover="closest")
+            fig3.update_yaxes(tickformat=",")
+            _insp_plot(fig3, "flash_cum")
+        else:
+            bc = g.groupby("commodity")["vol"].sum().reindex(coms).dropna()
+            fig3 = go.Figure(go.Bar(x=bc.index, y=bc.values, marker_color=_CH_SAGE,
+                                    text=[f"{v:,.0f}" for v in bc.values], textposition="outside", cliponaxis=False,
+                                    textfont=dict(color=_CH_MUTED, size=11)))
+            _insp_style(fig3, max(340, len(show) * 32 + 60), title="Volume by commodity (TMT)", legend=False, hover="closest")
+            fig3.update_yaxes(tickformat=",")
+            _insp_plot(fig3, "flash_com_bar")
+
+    # ── every announcement ───────────────────────────────────────────────────────────────────────
+    _insp_sec("Every announcement")
+    both = pd.concat([g.assign(note=np.where(g["flags"].str.contains("my_derived"), "Marketing year estimated", "")),
+                      adj.assign(vol=adj["tmt"] * (factor or 1.0), note="Correction, not in the totals")])
+    tbl = both.sort_values(["date", "mt"], ascending=[False, False]).assign(date=lambda d: d["date"].dt.date)
+    out = pd.DataFrame({"Date": tbl["date"], "Commodity": tbl["commodity"], "Destination": tbl["dest"],
+                        f"Volume ({unit})": tbl["vol"], "Marketing year": tbl["my"], "ESR": tbl["esr"],
+                        "Source": tbl["source"].map({"email": "USDA email", "history": "Desk history"}).fillna(tbl["source"]),
+                        "Note": tbl["note"]})
+    _cfg = {f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f")}
+    try:
+        st.dataframe(out, hide_index=True, width="stretch", height=420, column_config=_cfg)
+    except TypeError:                      # older Streamlit
+        st.dataframe(out, hide_index=True, use_container_width=True, height=420, column_config=_cfg)
+    st.download_button("Download CSV", out.to_csv(index=False).encode("utf-8"), "usda_flash_sales.csv", "text/csv", key="flash_csv")
+    n_hist = int((g["source"] == "history").sum())
+    st.caption(
+        "Source: USDA FAS daily flash export sales (private exporters' reports of 100,000 t or more of one commodity to one destination; "
+        f"soybean oil 20,000 t). {len(g) - n_hist:,} announcements come from the USDA emails, {n_hist:,} from the desk's spreadsheet history "
+        "(Aug 2024 onward), whose marketing year is worked out from the sale date. Switches, cancellations and other corrections are listed "
+        "but left out of every total. A sale on the same day in both sources is counted once, from the email."
+    )
+
+
 def main():
 
     _white_mtime = os.path.getmtime(LOGO_WHITE_PATH) if os.path.exists(LOGO_WHITE_PATH) else 0
@@ -7364,9 +7587,9 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
+    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, flash_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
         ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
-         "🇨🇳  China Imports", "🔍  US Inspections", "📈  Export Sales",
+         "🇨🇳  China Imports", "🔍  US Inspections", "📈  Export Sales", "⚡  Flash Sales",
          "🧭  Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
     )
 
@@ -7403,6 +7626,12 @@ def main():
             _run_export_sales_tab(use_bushels=use_bushels, unit_short=unit_short)
         except Exception as _e:
             st.error(f"Export Sales tab error: {_e}")
+
+    with flash_tab:
+        try:
+            _run_flash_sales_tab(use_bushels)
+        except Exception as _e:
+            st.error(f"Flash Sales tab error: {_e}")
 
     with dest_tab:
         try:
