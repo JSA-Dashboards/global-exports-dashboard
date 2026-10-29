@@ -200,9 +200,11 @@ def _chart_config(fig) -> dict:
 _orig_plotly_chart = getattr(st, "_jsa_orig_plotly_chart", None) or st.plotly_chart
 st._jsa_orig_plotly_chart = _orig_plotly_chart
 def _patched_plotly_chart(fig, **kw):
+    if sys._getframe(1).f_globals.get("__name__", "").endswith("copy_tools"):
+        return _orig_plotly_chart(fig, **kw)        # the Vessel tab's charts: drawn as the standalone dashboard draws them, with their own buttons
     kw.setdefault("config", _chart_config(fig))
     kw.setdefault("theme", None)        # the figures style themselves; Streamlit's theme would overrule their fonts and legend colours
-    if png_tools is None or sys._getframe(1).f_globals.get("__name__", "").endswith("copy_tools"):     # the Vessel tab has its own Copy buttons
+    if png_tools is None:
         return _orig_plotly_chart(fig, **kw)
     return png_tools.chart(_orig_plotly_chart, fig, kw)
 st.plotly_chart = _patched_plotly_chart
