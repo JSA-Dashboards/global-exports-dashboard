@@ -34,6 +34,7 @@ import plotly.express as px
 import base64
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -154,11 +155,30 @@ _CHART_CONFIG = {
     "modeBarButtonsToRemove": ["lasso2d", "select2d"],
     "toImageButtonOptions":   {"format": "png", "scale": 2, "filename": "jsa_export_chart"},
 }
-_orig_plotly_chart = st.plotly_chart
+try:
+    import png_tools                    # a PNG button above every chart and table (the component needs Streamlit >= 1.51)
+except Exception:
+    png_tools = None
+
+
+def _chart_config(fig) -> dict:
+    """_CHART_CONFIG with the toolbar camera's file name taken from the chart's own title, so a saved chart says what it is."""
+    if png_tools is None:
+        return _CHART_CONFIG
+    name = f"{png_tools.slug(png_tools.fig_title(fig) or 'jsa_export_chart')}_{png_tools.stamp()}"
+    return {**_CHART_CONFIG, "toImageButtonOptions": {**_CHART_CONFIG["toImageButtonOptions"], "filename": name}}
+
+
+# The script runs again on every rerun, in the same process: remember the real st.plotly_chart on the streamlit module itself, or each
+# run would wrap the previous run's wrapper (and a PNG button would be added once per run so far).
+_orig_plotly_chart = getattr(st, "_jsa_orig_plotly_chart", None) or st.plotly_chart
+st._jsa_orig_plotly_chart = _orig_plotly_chart
 def _patched_plotly_chart(fig, **kw):
-    kw.setdefault("config", _CHART_CONFIG)
+    kw.setdefault("config", _chart_config(fig))
     kw.setdefault("theme", None)        # the figures style themselves; Streamlit's theme would overrule their fonts and legend colours
-    return _orig_plotly_chart(fig, **kw)
+    if png_tools is None or sys._getframe(1).f_globals.get("__name__", "").endswith("copy_tools"):     # the Vessel tab has its own Copy buttons
+        return _orig_plotly_chart(fig, **kw)
+    return png_tools.chart(_orig_plotly_chart, fig, kw)
 st.plotly_chart = _patched_plotly_chart
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1408,6 +1428,15 @@ def _table_legend_html(cy, has_estimates: bool, est_how: str = "") -> str:
 _TITLE_COMMODITY = {"Soybeans": "Soybean"}      # "United States Soybean Exports", not "Soybeans Exports"
 
 
+def _view_title_text(field_label: str, commodity_label: str, is_import: bool) -> str:
+    """"United States Corn Exports": the country that is filtered, the commodity, exports (imports for China's import field)."""
+    flow = "Imports" if is_import else "Exports"
+    who = field_label[:-len(" Imports")] if is_import and field_label.endswith(" Imports") else field_label
+    if who == "Major Exporters":
+        who += "'"                                    # Major Exporters' Corn Exports
+    return f"{who} {_TITLE_COMMODITY.get(commodity_label, commodity_label)} {flow}"
+
+
 def _view_title_html(field_label: str, commodity_label: str, is_import: bool, unit_short: str) -> str:
     """The title above a country / category view, e.g. "United States Corn Exports (TMT)": the country that is
     filtered, the commodity, exports (imports for China's import field) and the unit the tables are listed in."""
@@ -1425,24 +1454,33 @@ def _view_title_html(field_label: str, commodity_label: str, is_import: bool, un
     )
 
 
-def _show_table(pivot, html: str, key: str) -> None:
-    """Render a styled HTML table with a CSV download button above it."""
-    btn_col, _ = st.columns([1, 6])
-    with btn_col:
-        try:
-            # pivot is {month: {year: value}} — transpose so years are columns
-            csv_data = pd.DataFrame(pivot).T.to_csv(index_label="Month")
-        except Exception:
-            csv_data = ""
-        if csv_data:
-            st.download_button(
-                "⬇ CSV",
-                data=csv_data,
-                file_name=f"{key}.csv",
-                mime="text/csv",
-                key=f"dl_{key}",
-            )
-    st.markdown(html, unsafe_allow_html=True)
+def _show_table(pivot, html: str, key: str, title: str = "", subtitle: str = "") -> None:
+    """Render a styled HTML table with CSV and PNG download buttons above it (`title` and `subtitle` head the PNG)."""
+    box, pkey = png_tools.wrap(f"tbl_{key}") if png_tools else (None, None)
+    with (box if box is not None else st.container()):
+        btn_col, png_col, _ = st.columns([1, 1, 5])
+        with btn_col:
+            try:
+                # pivot is {month: {year: value}} — transpose so years are columns
+                csv_data = pd.DataFrame(pivot).T.to_csv(index_label="Month")
+            except Exception:
+                csv_data = ""
+            if csv_data:
+                st.download_button(
+                    "⬇ CSV",
+                    data=csv_data,
+                    file_name=f"{key}.csv",
+                    mime="text/csv",
+                    key=f"dl_{key}",
+                )
+        if png_tools:
+            with png_col:
+                try:
+                    png_tools.button("table", pkey, f"{png_tools.slug(title or key)}_{png_tools.stamp()}", title or key.replace("_", " "),
+                                     subtitle, "Source: Trade Data Monitor (TDM), US Census Bureau, USDA FGIS", align="left")
+                except Exception:
+                    pass
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def render_table_html(data_pivot, stats, all_years, cy, ly, months,
@@ -3226,6 +3264,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                               model1_pivot=model1_pivot,
                               model2_pivot=model2_pivot),
             f"{commodity}_{field_label}_monthly",
+            title=f"{_view_title_text(field_label, cfg['label'], field in cfg['import_fields'])}: monthly shipments ({unit_short})",
+            subtitle=f"{my_label} marketing year. Stats reflect prior marketing years only.",
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
@@ -3255,6 +3295,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                               model1_pivot=cum_model1,
                               model2_pivot=cum_model2),
             f"{commodity}_{field_label}_cumulative",
+            title=f"{_view_title_text(field_label, cfg['label'], field in cfg['import_fields'])}: cumulative shipments ({unit_short})",
+            subtitle=f"{my_label} marketing year. Stats reflect prior marketing years only.",
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
@@ -3760,6 +3802,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                               model1_pivot=model1_pivot_w,
                               model2_pivot=model2_pivot_w),
             f"wheat_{field_label}_monthly",
+            title=f"{_view_title_text(field_label, cfg['label'], field in cfg['import_fields'])}: monthly shipments ({unit_short})",
+            subtitle=f"{my_label} marketing year. Stats reflect prior marketing years only.",
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
@@ -3789,6 +3833,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                               model1_pivot=cum_model1_w,
                               model2_pivot=cum_model2_w),
             f"wheat_{field_label}_cumulative",
+            title=f"{_view_title_text(field_label, cfg['label'], field in cfg['import_fields'])}: cumulative shipments ({unit_short})",
+            subtitle=f"{my_label} marketing year. Stats reflect prior marketing years only.",
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
@@ -4433,15 +4479,21 @@ def _run_china_imports_tab(logo_b64=None):
         f'{tot_cells}</tr>'
     )
 
-    st.markdown(
-        f'<div style="overflow-x:auto;border-radius:8px;border:1px solid {_CH_BORDER};background:#ffffff;'
-        f'font-family:Arial;font-size:12px;margin-bottom:12px;">'
-        f'<table style="border-collapse:collapse;width:max-content;min-width:100%;">'
-        f'<thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>'
-        f'<tbody>{tbl_rows}</tbody>'
-        f'</table></div>',
-        unsafe_allow_html=True,
-    )
+    box = (png_tools.table("china_my_totals", f"china_{png_tools.slug(commodity)}_imports_by_source_{png_tools.stamp()}",
+                           f"China {commodity} imports by source country: marketing-year totals (TMT)",
+                           f"Marketing years, newest first · MY convention {'Jul–Jun' if is_wheat else 'Oct–Sep'}",
+                           "Source: Trade Data Monitor (TDM), China import declarations")
+           if png_tools else st.container())
+    with box:
+        st.markdown(
+            f'<div style="overflow-x:auto;border-radius:8px;border:1px solid {_CH_BORDER};background:#ffffff;'
+            f'font-family:Arial;font-size:12px;margin-bottom:12px;">'
+            f'<table style="border-collapse:collapse;width:max-content;min-width:100%;">'
+            f'<thead><tr style="background:{_LT_HEAD};">{hdr}</tr></thead>'
+            f'<tbody>{tbl_rows}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
 
     st.caption(
         f"Source: Trade Data Monitor (TDM) · China import declarations · "
@@ -4542,7 +4594,12 @@ def _render_my_reference_tab():
         ("Major Exporters", "—",     "Oct–Sep", "Oct–Sep"),
     ])
 
-    st.markdown(wheat_html + corn_html + soy_html + meal_html, unsafe_allow_html=True)
+    for name, html_ in (("Wheat", wheat_html), ("Corn", corn_html), ("Soybeans", soy_html), ("Soybean meal", meal_html)):
+        box = (png_tools.table(f"my_ref_{name}", f"{png_tools.slug(name)}_marketing_year_structure_{png_tools.stamp()}",
+                               f"{name} marketing year structure", "USDA marketing year (Oct–Sep unless noted) against each country's local marketing year",
+                               "Source: USDA, national statistics agencies") if png_tools else st.container())
+        with box:
+            st.markdown(html_, unsafe_allow_html=True)
 
     # ── USDA PSD link ─────────────────────────────────────────────────────
     st.markdown(f"""
@@ -4965,6 +5022,12 @@ _INSP_CSS = """
 .snap-val { color:#32373c; font-size:1.45rem; font-weight:700; line-height:1.15; }
 .snap-top { color:#32373c; font-size:1.1rem; font-weight:700; line-height:1.2; }
 .snap-off { color:#5f7267; font-size:.8rem; padding:12px 14px; }
+/* the USDA estimate tracker: blue-topped tiles; a bar for how much of USDA's estimate is done, a tick where last year stood at the same week */
+.insp-tile.trk { border-top-color:#6fa8c4; min-height:150px; }
+.trk-bar { position:relative; height:10px; background:#e8eeea; border-radius:5px; margin:9px 0 7px; }
+.trk-fill { position:absolute; left:0; top:0; bottom:0; background:#6fa8c4; border-radius:5px; }
+.trk-ly { position:absolute; top:-4px; bottom:-4px; width:3px; background:#c4785a; border-radius:2px; }
+.snap-kpi .trk-bar { margin:6px 0 5px; }
 </style>
 """
 _INSP_RESET_KEYS = ("insp_my_", "insp_week_", "insp_view", "insp_cls_", "insp_car_", "insp_reg_", "insp_dst_", "insp_seg", "insp_units_")
@@ -5040,7 +5103,16 @@ def _insp_plot(fig: go.Figure, key: str) -> None:
         st.plotly_chart(fig, use_container_width=True, theme=None, key=key)
 
 
-def _insp_table(data, height: int) -> None:
+def _insp_table(data, height: int, png: dict | None = None) -> None:
+    """st.dataframe across Streamlit versions. `png` ({key, title, subtitle, source, df, formats, index_label}) puts a PNG button above
+    it: `df` holds the rows as shown and `formats` says how each column is printed there (an st.dataframe is a canvas grid, so the
+    button is handed the table as HTML)."""
+    if png and png_tools:
+        box = png_tools.table(png["key"], f"{png_tools.slug(png['title'])}_{png_tools.stamp()}", png["title"], png.get("subtitle", ""),
+                              png.get("source", ""), png_tools.table_html(png["df"], png.get("formats"), index_label=png.get("index_label", "")))
+        with box:
+            _insp_table(data, height)
+        return
     try:
         st.dataframe(data, width="stretch", height=height)
     except TypeError:
@@ -5058,8 +5130,8 @@ def _insp_delta_line(p, text: str) -> str:
     return f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(p):,.1f}%</b> {text}</div>'
 
 
-def _insp_tile(label: str, value: str, unit: str, lines: list) -> str:
-    return (f'<div class="insp-tile"><div class="insp-tile-label">{label}</div>'
+def _insp_tile(label: str, value: str, unit: str, lines: list, cls: str = "") -> str:
+    return (f'<div class="insp-tile{" " + cls if cls else ""}"><div class="insp-tile-label">{label}</div>'
             f'<div class="insp-tile-value">{value}<span class="insp-tile-unit">{unit}</span></div>'
             f'{"".join(lines)}</div>')
 
@@ -5436,6 +5508,7 @@ def _insp_render(use_bushels: bool) -> None:
     ]
     for col, html in zip(st.columns(4), tiles):
         col.markdown(html, unsafe_allow_html=True)
+    _usda_insp_tracker(df, grain, sel_my, sel_week, lb, bu_ok, unit, my_label)
 
     when = (f"Week {sel_week} · ending {week_end(sel_week):%b %d, %Y}" if view == "Weekly"
             else f"{my_label} to date · through week {sel_week} ({week_end(sel_week):%b %d, %Y})")
@@ -5500,8 +5573,13 @@ def _insp_render(use_bushels: bool) -> None:
     vf = "{:,.1f}" if unit == "Mbu" else "{:,.0f}"
     show = tbl.head(60).rename(columns={c: f"{c} ({unit})" for c in (wk_col, ytd_col, ly_col)})
     show["% vs last year"] = show["% vs last year"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
-    _insp_table(show.style.format({show.columns[0]: vf, show.columns[1]: vf, show.columns[2]: vf,
-                                   "Share of year to date": "{:.1f}%"}, na_rep="—"), 420)
+    fmt = {show.columns[0]: vf, show.columns[1]: vf, show.columns[2]: vf, "Share of year to date": "{:.1f}%"}
+    _insp_table(show.style.format(fmt, na_rep="—"), 420,
+                png=dict(key="insp_detail", title=f"United States {_TITLE_COMMODITY.get(grain, grain)} Export Inspections: detail by destination ({unit})",
+                         subtitle=f"{my_label} to date through week {sel_week}, against the same period last year"
+                                  + (f" · the largest {len(show)} destinations" if len(tbl) > len(show) else ""),
+                         source="Source: USDA Federal Grain Inspection Service export inspections (AMS AgTransport)",
+                         df=show, formats=fmt, index_label="Destination"))
 
     mo = pd.Timestamp(year=2000, month=start_month, day=1).strftime("%B")
     st.markdown(
@@ -6115,15 +6193,27 @@ def _esr_render(use_bushels: bool) -> None:
                                  _esr_delta_line(k["cur"], k["oly"], "vs 6-yr Olympic avg", unit)]))
     for cell_col, html_ in zip(st.columns(6), tiles):
         cell_col.markdown(html_, unsafe_allow_html=True)
+    _usda_esr_tracker(df, code, commodity, sel_my, sel_week, sc, unit)
 
     # ── summary table ─────────────────────────────────────────────────────────
     _insp_sec("Summary")
     ly_end = _esr_first_thu(code, sel_my - 1) + pd.Timedelta(weeks=sel_week - 1) if (sel_my - 1) in T["net"].index else None
     labels = {"cur": f"Week {sel_week} · {week_end(sel_week):%b %d, %Y}",
               "ly": f"A year ago · {ly_end:%b %d, %Y}" if ly_end is not None else "A year ago"}
-    p1, _ = st.columns([1.4, 4.6])
-    as_pct = p1.toggle("Show changes as %", key="esr_pct")
-    st.markdown(_esr_summary_html(comp, unit, as_pct, labels), unsafe_allow_html=True)
+    box, pkey = png_tools.wrap("esr_summary") if png_tools else (st.container(), None)
+    with box:
+        p1, _, p3 = st.columns([1.4, 3.2, 1.4])
+        as_pct = p1.toggle("Show changes as %", key="esr_pct")
+        if png_tools:
+            with p3:
+                try:
+                    png_tools.button("table", pkey, f"us_{png_tools.slug(commodity)}_export_sales_summary_{png_tools.stamp()}",
+                                     f"United States {name} Export Sales: summary, week {sel_week}",
+                                     f"{labels['cur']} · {unit} · changes as {'percentages' if as_pct else 'volumes'}",
+                                     "Source: USDA Foreign Agricultural Service, Export Sales Reporting (ESR)", align="right")
+                except Exception:
+                    pass
+        st.markdown(_esr_summary_html(comp, unit, as_pct, labels), unsafe_allow_html=True)
     st.markdown(f'<div class="insp-note">All figures in {unit}. A year ago and the 6-yr Olympic average are the same marketing-year week. '
                 f'Sales and exports compare with the previous report; balances (accumulated exports, outstanding sales, commitments) '
                 f'with the previous week of the same marketing year, and the 4-week average of a balance is taken within it.</div>',
@@ -6206,7 +6296,12 @@ def _esr_render(use_bushels: bool) -> None:
     show["Commitments vs a year ago"] = show["Commitments vs a year ago"].map(lambda p: "—" if pd.isna(p) else f"{p:+.1f}%")   # a null cell would read "None"
     fmt = {nice[c]: vf for c in num_cols}
     fmt["Share of commitments"] = "{:.1f}%"
-    _insp_table(show.style.format(fmt, na_rep="—"), 420)
+    _insp_table(show.style.format(fmt, na_rep="—"), 420,
+                png=dict(key="esr_detail", title=f"United States {name} Export Sales: detail by destination ({unit})",
+                         subtitle=f"{my_label} · week {sel_week} ending {week_end(sel_week):%b %d, %Y}"
+                                  + (f" · the largest {len(show)} destinations" if len(tbl) > len(show) else ""),
+                         source="Source: USDA Foreign Agricultural Service, Export Sales Reporting (ESR)",
+                         df=show, formats=fmt, index_label="Destination"))
 
     st.markdown(
         '<div class="insp-note">Source: USDA Foreign Agricultural Service, Export Sales Reporting (ESR), by week ending Thursday; '
@@ -6226,6 +6321,229 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         _esr_render(use_bushels)
     except Exception as e:
         st.error(f"Export Sales tab error: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# USDA ESTIMATE TRACKER  (the Inspections and Export Sales tiles, and their snapshot cards)
+#   USDA's export estimate for the marketing year (PSD: US exports on the commodity's own marketing-year basis, 1000 MT) and the
+#   prior year's final one, against where this year stands at the same week: inspected (FGIS), or committed and shipped (export
+#   sales), as a share of the estimate; and where last year stood at the same week as a share of ITS final. That share is read
+#   against last year's, never against 100%: inspections miss part of the rail and truck loadings, and commitments are not shipments.
+# ─────────────────────────────────────────────────────────────────────────────
+_USDA_PSD = {"Corn": "0440000", "Soybeans": "2222000", "Soybean meal": "0813100", "Soybean oil": "4232000", "Wheat": "0410000",
+             "Sorghum": "0459200", "Barley": "0430000", "Oats": "0452000"}      # tab commodity -> PSD commodity code
+# ESR label / inspection grain -> _USDA_PSD key. Wheat classes, rice and the meats have no PSD figure on the same basis (PSD counts
+# rice milled and meat in carcass weight; the classes are only in the WASDE tables), so they get no tracker.
+_USDA_OF_ESR = {"Corn": "Corn", "Soybeans": "Soybeans", "Soybean meal": "Soybean meal", "Soybean oil": "Soybean oil",
+                "Wheat - all": "Wheat", "Sorghum": "Sorghum"}
+_USDA_OF_INSP = {"Corn": "Corn", "Soybeans": "Soybeans", "Wheat": "Wheat", "Sorghum": "Sorghum", "Barley": "Barley", "Oats": "Oats"}
+
+
+@st.cache_resource(ttl=6 * 3600, show_spinner=False)
+def _usda_store() -> dict:
+    """USDA's export estimates, kept six hours (PSD changes once a month, with the WASDE): {(key, PSD year): (1000 MT, (year, month)
+    of the WASDE) or None where PSD lists none}. A resource, so worker threads can fill it, and Refresh Data empties it."""
+    return {"lock": threading.Lock(), "got": {}, "bad": {}}
+
+
+def _usda_psd_get(code: str, year: int):
+    """(1000 MT, (WASDE year, month)) of US exports for one PSD marketing year, None when PSD lists none. A plain function, safe in
+    a worker thread. Retries a hiccup, then raises a RuntimeError that never carries the URL (it holds the API key)."""
+    url = (f"{_ESR_GATEWAY}/api/psd/commodity/{code}/country/US/year/{int(year)}"
+           f"?{urllib.parse.urlencode({'api_key': _ESR_API_KEY})}")
+    why, rows = "no answer", None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                rows = json.loads(r.read())
+            break
+        except urllib.error.HTTPError as e:
+            why = f"HTTP {e.code}"
+            if e.code not in (429, 500, 502, 503, 504):
+                break
+        except Exception as e:                                  # timeouts, resets, a page that is not JSON
+            why = type(e).__name__
+        time.sleep(1.5 * (attempt + 1))
+    if rows is None:
+        raise RuntimeError(f"USDA PSD did not answer ({why})")
+    ex = [r for r in rows if r.get("attributeId") == 88 and r.get("value") not in (None, "")]
+    if not ex:
+        return None
+    r = max(ex, key=lambda x: (int(x["calendarYear"]), int(x["month"])))
+    return float(r["value"]), (int(r["calendarYear"]), int(r["month"]))
+
+
+def _usda_us(pairs: list, store: dict | None = None):
+    """({(key, PSD year): (1000 MT, WASDE month) or None}, failed pairs) for the pairs asked, those not held yet fetched side by
+    side. A pair that fails is left out and tried again after five minutes (not on every click). `store` lets a worker thread (which
+    must not call st.cache_resource) pass in the one it was handed."""
+    store = store if store is not None else _usda_store()
+    pairs = list(dict.fromkeys(pairs))
+    now = time.time()
+    with store["lock"]:
+        todo = [p for p in pairs if p not in store["got"] and now - store["bad"].get(p, (0.0, ""))[0] > 300]
+    failed = {p: store["bad"][p][1] for p in pairs if p not in store["got"] and p not in todo and p in store["bad"]}
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            futures = {p: pool.submit(_usda_psd_get, _USDA_PSD[p[0]], p[1]) for p in todo}
+        for p, fut in futures.items():                          # the with-block has waited for every call
+            try:
+                got = fut.result()
+            except Exception as e:
+                failed[p] = str(e)
+                with store["lock"]:
+                    store["bad"][p] = (time.time(), str(e))
+            else:
+                with store["lock"]:
+                    store["got"][p] = got
+                    store["bad"].pop(p, None)
+    with store["lock"]:
+        return {p: store["got"][p] for p in pairs if p in store["got"]}, sorted(failed)
+
+
+def _usda_figures(got: dict, key: str, psd_year: int, scale: float):
+    """USDA's estimate for PSD marketing year `psd_year` and the prior year's final one, in the tab's unit (`scale` turns 1000 MT into
+    it). None when PSD has no figure for the year asked."""
+    cur, ly = got.get((key, psd_year)), got.get((key, psd_year - 1))
+    if not cur:
+        return None
+    return dict(est=cur[0] * scale, ly_est=ly[0] * scale if ly else None, asof=cur[1])
+
+
+def _usda_scale(lb, bu_ok: bool) -> float:
+    """1000 MT -> TMT (1) or Mbu."""
+    return 1000.0 * (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1.0
+
+
+def _usda_my(psd_year: int) -> str:
+    return f"{psd_year}/{str(psd_year + 1)[-2:]}"
+
+
+def _usda_share(v, est):
+    return None if v is None or est is None or pd.isna(v) or pd.isna(est) or est <= 0 else float(v) / float(est) * 100.0
+
+
+def _trk_bar(share, ly_share) -> str:
+    """The progress bar: filled to this year's share of USDA's estimate, with a tick where last year stood at the same week."""
+    fill = "" if share is None else f'<div class="trk-fill" style="width:{min(share, 100.0):.1f}%"></div>'
+    tick = "" if ly_share is None else f'<div class="trk-ly" style="left:calc({min(ly_share, 100.0):.1f}% - 1px)"></div>'
+    return f'<div class="trk-bar">{fill}{tick}</div>'
+
+
+def _trk_vs_line(share, ly_share, tail: str = "") -> str:
+    """'▲ 3.1 pts vs last year at this week (38.2% of its final)': ahead of or behind last year's pace, in points of the estimate."""
+    if share is None or ly_share is None:
+        return '<div class="insp-line">— no same-week figure for last year</div>'
+    d = share - ly_share
+    col, arrow = (_INSP_POS, "▲") if d >= 0 else (_INSP_NEG, "▼")
+    return (f'<div class="insp-line"><b style="color:{col}">{arrow} {abs(d):.1f} pts</b> vs last year at this week '
+            f'({ly_share:.1f}% of its final){tail}</div>')
+
+
+def _usda_est_tile(my_label: str, ly_label: str, fig: dict, unit: str) -> str:
+    """The estimate itself, against the prior year's final."""
+    ly = fig["ly_est"]
+    lines = [_insp_delta_line(_insp_pct(fig["est"], ly), f"vs {ly_label} final ({_insp_fmt(ly, unit)} {unit})") if ly
+             else '<div class="insp-line">— USDA has no prior-year figure</div>',
+             f'<div class="insp-line">USDA PSD · {datetime(fig["asof"][0], fig["asof"][1], 1):%B %Y} WASDE</div>']
+    return _insp_tile(f"USDA export estimate · {my_label}", _insp_fmt(fig["est"], unit), unit, lines, cls="trk")
+
+
+def _usda_pace_tile(label: str, cur, ly, fig: dict, unit: str) -> str:
+    """How much of USDA's estimate is done (bar), against last year's share at the same week."""
+    share, ly_share = _usda_share(cur, fig["est"]), _usda_share(ly, fig["ly_est"])
+    lines = [_trk_bar(share, ly_share), _trk_vs_line(share, ly_share),
+             f'<div class="insp-line">{_insp_fmt(cur, unit)} of {_insp_fmt(fig["est"], unit)} {unit}</div>']
+    return _insp_tile(label, "—" if share is None else f"{share:.1f}", "% of USDA est.", lines, cls="trk")
+
+
+def _usda_snap_kpi(my_label: str, ly_label: str, fig: dict, unit: str, cur, ly, what: str) -> str:
+    """The USDA block of a snapshot card: the estimate against last year's final, and `what` (committed, inspected, shipped) as its share."""
+    share, ly_share = _usda_share(cur, fig["est"]), _usda_share(ly, fig["ly_est"])
+    lines = [_insp_delta_line(_insp_pct(fig["est"], fig["ly_est"]), f"vs {ly_label} final"), _trk_bar(share, ly_share)]
+    lines.append('<div class="insp-line">— no same-week figure for last year</div>' if share is None or ly_share is None else
+                 f'<div class="insp-line">{what} <b>{share:.1f}%</b> of it · last year <b>{ly_share:.1f}%</b></div>')
+    return _snap_kpi(f"USDA estimate · {my_label}", _insp_fmt(fig["est"], unit), unit, lines)
+
+
+def _usda_off(why: str) -> None:
+    st.markdown(f'<div class="insp-note">USDA estimate tracker: {_html_escape(why)}</div>', unsafe_allow_html=True)
+
+
+def _usda_esr_tracker(df: pd.DataFrame, code: int, commodity: str, sel_my: int, sel_week: int, sc: float, unit: str) -> None:
+    """Export Sales: a row of three tiles under the KPI tiles. `df` is every destination, unfiltered (a destination filter has no
+    business in a comparison with USDA's national figure); `sc` turns metric tons into the tab's unit."""
+    key = _USDA_OF_ESR.get(commodity)
+    if key is None:
+        _usda_off("USDA's PSD has no export estimate on the same basis for this commodity; it is shown for corn, soybeans, soybean meal, "
+                  "soybean oil, all-class wheat and sorghum.")
+        return
+    psd_year = sel_my - 1 if _ESR_START[code] > 1 else sel_my
+    got, failed = _usda_us([(key, psd_year), (key, psd_year - 1)])
+    fig = _usda_figures(got, key, psd_year, 1000.0 * sc)
+    if fig is None:
+        _usda_off(f"USDA's estimate for {_usda_my(psd_year)} could not be read just now (USDA PSD did not answer); "
+                  "Refresh Data tries again." if failed else f"USDA has no export estimate for {_usda_my(psd_year)} yet.")
+        return
+    tot = df.groupby(["my", "wk"])[["acc", "commit"]].sum() * sc
+
+    def at(my: int, col: str):
+        try:
+            return float(tot.at[(my, sel_week), col])
+        except KeyError:
+            return None
+
+    my_label, ly_label = _usda_my(psd_year), _usda_my(psd_year - 1)
+    _insp_sec("USDA estimate tracker")
+    tiles = [_usda_est_tile(my_label, ly_label, fig, unit),
+             _usda_pace_tile("Total commitments vs USDA estimate", at(sel_my, "commit"), at(sel_my - 1, "commit"), fig, unit),
+             _usda_pace_tile("Exports to date vs USDA estimate", at(sel_my, "acc"), at(sel_my - 1, "acc"), fig, unit)]
+    for cell, html_ in zip(st.columns(3), tiles):
+        cell.markdown(html_, unsafe_allow_html=True)
+    st.markdown(f'<div class="insp-note">USDA export estimate: the US exports figure of USDA\'s PSD for {my_label} (marketing-year basis, '
+                f'all destinations), as of the {datetime(fig["asof"][0], fig["asof"][1], 1):%B %Y} WASDE; {ly_label} is USDA\'s latest '
+                f'figure for that year. The bars show commitments (accumulated exports plus outstanding sales) and accumulated exports through '
+                f'week {sel_week} as a share of the estimate; the orange tick is where {ly_label} stood at the same week against its final. '
+                f'The destination filters do not apply here. Commitments run ahead of shipments, so read the share against last year\'s, '
+                f'not against 100%.</div>', unsafe_allow_html=True)
+
+
+def _usda_insp_tracker(df: pd.DataFrame, grain: str, sel_my: int, sel_week: int, lb, bu_ok: bool, unit: str, my_label: str) -> None:
+    """Inspections: a row of two tiles under the KPI tiles. `df` is every certificate of the grain, unfiltered (a class or destination
+    filter has no business in a comparison with USDA's national figure)."""
+    key = _USDA_OF_INSP.get(grain)
+    if key is None:
+        _usda_off("USDA's PSD has no export estimate for this grain; it is shown for corn, soybeans, wheat, sorghum, barley and oats.")
+        return
+    got, failed = _usda_us([(key, sel_my), (key, sel_my - 1)])
+    fig = _usda_figures(got, key, sel_my, _usda_scale(lb, bu_ok))
+    if fig is None:
+        _usda_off(f"USDA's estimate for {my_label} could not be read just now (USDA PSD did not answer); Refresh Data tries again."
+                  if failed else f"USDA has no export estimate for {my_label} yet.")
+        return
+    v = (df["lbs"] / lb / 1e6) if bu_ok else (df["mt"] / 1000.0)
+    by_week = v.groupby([df["my"], df["my_week"]]).sum()
+
+    def ytd(my: int):
+        s = by_week.get(my)
+        return None if s is None or s.empty else float(s[s.index <= sel_week].sum())
+
+    ly_label = _usda_my(sel_my - 1)
+    ly_total = by_week.get(sel_my - 1)
+    ly_final = _usda_share(float(ly_total.sum()) if ly_total is not None else None, fig["ly_est"])
+    _insp_sec("USDA estimate tracker")
+    tiles = [_usda_est_tile(my_label, ly_label, fig, unit),
+             _usda_pace_tile("Inspected to date vs USDA estimate", ytd(sel_my), ytd(sel_my - 1), fig, unit)]
+    for cell, html_ in zip(st.columns(2), tiles):
+        cell.markdown(html_, unsafe_allow_html=True)
+    tail = (f" {ly_label} inspections ended at {ly_final:.0f}% of USDA's final estimate." if ly_final is not None else "")
+    st.markdown(f'<div class="insp-note">USDA export estimate: the US exports figure of USDA\'s PSD for {my_label} (marketing-year basis), as of '
+                f'the {datetime(fig["asof"][0], fig["asof"][1], 1):%B %Y} WASDE; {ly_label} is USDA\'s latest figure for that year. The bar is '
+                f'the marketing year to date through week {sel_week} as a share of the estimate; the orange tick is where {ly_label} stood at the '
+                f'same week against its final. The filters do not apply here. Inspections cover vessel loadings and only part of the rail and '
+                f'truck shipments to Canada and Mexico, so they finish below USDA\'s estimate: read the share against last year\'s, not against '
+                f'100%.{tail}</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6314,12 +6632,25 @@ def _esr_snap_kpis(df: pd.DataFrame, code: int, cat: dict, sc: float) -> dict:
                 net_by=rows.groupby("country")["net"].sum() * sc, exp_by=rows.groupby("country")["exp"].sum() * sc)
 
 
-def _esr_snap_card(title: str, frame: pd.DataFrame, cat: dict, use_bu: bool) -> str:
+def _usda_esr_pairs(cat: dict, labels: list) -> list:
+    """The (key, PSD year) pairs the snapshot cards of these ESR commodities need: each one's current marketing year and the one before."""
+    pairs = []
+    for label in labels:
+        key, code = _USDA_OF_ESR.get(label), _ESR_COMMODITIES[label][0]
+        cur = cat["current"].get(code)
+        if key and cur:
+            y = cur - 1 if _ESR_START[code] > 1 else cur
+            pairs += [(key, y), (key, y - 1)]
+    return pairs
+
+
+def _esr_snap_card(title: str, frame: pd.DataFrame, cat: dict, use_bu: bool, usda: dict | None = None) -> str:
     """One commodity's card on the Export Sales snapshot."""
     code, _month, lb = _ESR_COMMODITIES[_SNAP_ESR[title]]
     bu_ok = use_bu and lb is not None
     unit = "Mbu" if bu_ok else "TMT"
-    k = _esr_snap_kpis(frame, code, cat, (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3)
+    sc = (_INSP_LBS_PER_MT / lb) / 1e6 if bu_ok else 1e-3
+    k = _esr_snap_kpis(frame, code, cat, sc)
     kpis = []
     for c, lab in (("net", f"Net sales · week {k['wk']}"), ("exp", "Weekly exports"), ("out", "Outstanding sales"),
                    ("acc", "Exports to date"), ("commit", "Total commitments")):
@@ -6328,13 +6659,20 @@ def _esr_snap_card(title: str, frame: pd.DataFrame, cat: dict, use_bu: bool) -> 
                               [_esr_delta_line(cc["cur"], cc["prev"], "vs last week", unit),
                                _esr_delta_line(cc["cur"], cc["ly"], "vs a year ago", unit),
                                _esr_delta_line(cc["cur"], cc["oly"], "vs 6-yr Olympic avg", unit)]))
+    key = _USDA_OF_ESR.get(_SNAP_ESR[title])
+    if usda and key:
+        psd_year = k["my"] - 1 if _ESR_START[code] > 1 else k["my"]
+        fig = _usda_figures(usda, key, psd_year, 1000.0 * sc)
+        if fig:
+            kpis.append(_usda_snap_kpi(_usda_my(psd_year), _usda_my(psd_year - 1), fig, unit,
+                                       k["comp"]["commit"]["cur"], k["comp"]["commit"]["ly"], "Committed"))
     name, lines = _snap_top_lines(k["net_by"], "week's net sales")
     kpis.append(_snap_top("Top buyer · net sales", name, lines))
     return _snap_card(title, [_esr_my_label(code, k["my"]) + (" · all classes" if title == "Wheat" else ""),
                               f"week ending {k['week_end']:%b %d}"], kpis)
 
 
-def _ship_snap_card(title: str, frame: pd.DataFrame, cat: dict) -> str:
+def _ship_snap_card(title: str, frame: pd.DataFrame, cat: dict, usda: dict | None = None) -> str:
     """A product's card on the Inspections snapshot: weekly shipments, because FGIS inspects grain, not meal or oil. These come from
     the weekly exports of USDA export sales (TMT: products have no bushel weight)."""
     code = _ESR_COMMODITIES[_SNAP_ESR[title]][0]
@@ -6350,12 +6688,18 @@ def _ship_snap_card(title: str, frame: pd.DataFrame, cat: dict) -> str:
         _snap_kpi(f"{_esr_my_label(code, k['my'])} to date", _insp_fmt(ac["cur"], unit), unit,
                   [_esr_delta_line(ac["cur"], ac["ly"], "vs last year", unit),
                    _esr_delta_line(ac["cur"], ac["oly"], "vs 6-yr Olympic avg", unit)]),
-        _snap_top("Top destination", name, lines),
     ]
+    key = _USDA_OF_ESR.get(_SNAP_ESR[title])
+    if usda and key:
+        psd_year = k["my"] - 1 if _ESR_START[code] > 1 else k["my"]
+        fig = _usda_figures(usda, key, psd_year, 1000.0 * 1e-3)
+        if fig:
+            kpis.append(_usda_snap_kpi(_usda_my(psd_year), _usda_my(psd_year - 1), fig, unit, ac["cur"], ac["ly"], "Shipped"))
+    kpis.append(_snap_top("Top destination", name, lines))
     return _snap_card(title, ["Shipments · USDA export sales", f"week ending {k['week_end']:%b %d}"], kpis)
 
 
-def _insp_snap_card(title: str, df: pd.DataFrame, use_bu: bool) -> str:
+def _insp_snap_card(title: str, df: pd.DataFrame, use_bu: bool, usda: dict | None = None) -> str:
     """One grain's card on the Inspections snapshot: the latest FGIS week."""
     _code, start_month, lb = _INSP_GRAINS[_SNAP_INSP[title]]
     bu_ok = use_bu and lb is not None
@@ -6380,6 +6724,11 @@ def _insp_snap_card(title: str, df: pd.DataFrame, use_bu: bool) -> str:
         _snap_top("Top destination", d_name, d_lines),
         _snap_top("Top origin region", r_name, r_lines),
     ]
+    key = _USDA_OF_INSP.get(_SNAP_INSP[title])
+    if usda and key:
+        fig = _usda_figures(usda, key, sel_my, _usda_scale(lb, bu_ok))
+        if fig:                                       # ahead of the top-destination blocks: it belongs with the year to date
+            kpis.insert(2, _usda_snap_kpi(_usda_my(sel_my), _usda_my(sel_my - 1), fig, unit, p["c_cur"], p["c_ly"], "Inspected"))
     return _snap_card(title, ["FGIS inspections", f"week ending {week_end:%b %d}"], kpis)
 
 
@@ -6400,6 +6749,7 @@ def _esr_snapshot(use_bu: bool) -> None:
         return
     with st.spinner("Loading the latest export sales…"):
         loads = _esr_snap_loads(cat, [_SNAP_ESR[t] for t in _SNAP_ORDER])
+    usda, _ = _usda_us(_usda_esr_pairs(cat, [_SNAP_ESR[t] for t in _SNAP_ORDER]))      # a failed estimate only leaves its block off
     cards = {}
     for t in _SNAP_ORDER:
         got = loads[_SNAP_ESR[t]]
@@ -6408,7 +6758,7 @@ def _esr_snapshot(use_bu: bool) -> None:
         elif got[0].empty:
             cards[t] = _snap_off(t, "No export sales are on file yet.")
         else:
-            cards[t] = _esr_snap_card(t, got[0], cat, use_bu)
+            cards[t] = _esr_snap_card(t, got[0], cat, use_bu, usda)
     _snap_header("United States Export Sales: summary snapshot")
     last = max((c for c in (loads[_SNAP_ESR[t]][0]["week"].max() for t in _SNAP_ORDER
                             if not isinstance(loads[_SNAP_ESR[t]], Exception) and not loads[_SNAP_ESR[t]][0].empty)), default=None)
@@ -6441,6 +6791,15 @@ def _insp_snapshot(use_bu: bool) -> None:
             f_ship = pool.submit(_esr_snap_loads, cat, ship_labels, esr_store) if cat is not None else None
         frames = f_insp.result()
         ships = f_ship.result() if f_ship is not None else {}
+    pairs = []                                                    # USDA's estimate for each card's marketing year and the one before
+    for t in _SNAP_ORDER:
+        got = frames.get(_INSP_GRAINS[_SNAP_INSP[t]][0]) if t in _SNAP_INSP else None
+        key = _USDA_OF_INSP.get(_SNAP_INSP.get(t, ""))
+        if key and isinstance(got, pd.DataFrame) and not got.empty:
+            pairs += [(key, int(got["my"].max())), (key, int(got["my"].max()) - 1)]
+    if cat is not None:
+        pairs += _usda_esr_pairs(cat, ship_labels)
+    usda, _ = _usda_us(pairs)                                     # a failed estimate only leaves its block off
     cards = {}
     for t in _SNAP_ORDER:
         if t in _SNAP_INSP:
@@ -6450,7 +6809,7 @@ def _insp_snapshot(use_bu: bool) -> None:
             elif got.empty:
                 cards[t] = _snap_off(t, "No export inspections are on file.")
             else:
-                cards[t] = _insp_snap_card(t, got, use_bu)
+                cards[t] = _insp_snap_card(t, got, use_bu, usda)
         else:
             got = ships.get(_SNAP_ESR[t], cat_err)
             if isinstance(got, Exception) or got is None:
@@ -6458,7 +6817,7 @@ def _insp_snapshot(use_bu: bool) -> None:
             elif got[0].empty:
                 cards[t] = _snap_off(t, "No export sales are on file yet.")
             else:
-                cards[t] = _ship_snap_card(t, got[0], cat)
+                cards[t] = _ship_snap_card(t, got[0], cat, usda)
     _snap_header("United States Export Inspections: summary snapshot")
     for t, col in zip(_SNAP_ORDER, st.columns(5)):
         col.markdown(cards[t], unsafe_allow_html=True)
@@ -6720,17 +7079,25 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         "Value ($M)": by["value"] / 1e6,
         "$/MT": (by["value"] / (by["vol"] / scale * 1000)).where(by["vol"] > 0),
     })
-    st.dataframe(
-        tbl, hide_index=True, use_container_width=True,
-        column_config={
-            f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
-            "Share": st.column_config.NumberColumn(format="%.1f%%"),
-            f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
-            "Change": st.column_config.NumberColumn(format="%+.1f%%"),
-            "Value ($M)": st.column_config.NumberColumn(format="$%,.1f"),
-            "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
-        },
-    )
+    shown = {f"Volume ({unit})": f"{{:,.{dec}f}}", "Share": "{:.1f}%", f"Year earlier ({unit})": f"{{:,.{dec}f}}",
+             "Change": "{:+.1f}%", "Value ($M)": "${:,.1f}", "$/MT": "${:,.0f}"}          # how the PNG prints each column
+    box = (png_tools.table(f"dest_detail", f"{png_tools.slug(Noun)}_detail_{png_tools.stamp()}", f"{Noun} detail: {span} ({unit})",
+                           "Largest first" + (f" · {len(tbl):,} rows, the first 80 shown" if len(tbl) > 80 else ""),
+                           "Source: USDA FAS GATS (US Census Bureau)" if place["src"] == "gats" else "Source: Trade Data Monitor (TDM)",
+                           png_tools.table_html(tbl.head(80), shown, index=False))
+           if png_tools else st.container())
+    with box:
+        st.dataframe(
+            tbl, hide_index=True, use_container_width=True,
+            column_config={
+                f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+                "Share": st.column_config.NumberColumn(format="%.1f%%"),
+                f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+                "Change": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Value ($M)": st.column_config.NumberColumn(format="$%,.1f"),
+                "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
+            },
+        )
     if place["src"] == "gats":
         st.caption(
             f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
@@ -6957,10 +7324,16 @@ def _run_flash_sales_tab(use_bushels: bool):
                         "Source": tbl["source"].map({"email": "USDA email", "history": "Desk history"}).fillna(tbl["source"]),
                         "Note": tbl["note"]})
     _cfg = {f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f")}
-    try:
-        st.dataframe(out, hide_index=True, width="stretch", height=420, column_config=_cfg)
-    except TypeError:                      # older Streamlit
-        st.dataframe(out, hide_index=True, use_container_width=True, height=420, column_config=_cfg)
+    box = (png_tools.table("flash_announcements", f"usda_flash_sales_{png_tools.stamp()}", "USDA flash export sales: every announcement",
+                           f"Latest {min(len(out), 80)} of {len(out):,} · volumes in {unit}",
+                           "Source: USDA FAS daily flash export sales",
+                           png_tools.table_html(out.head(80), {f"Volume ({unit})": f"{{:,.{dec}f}}"}, index=False))
+           if png_tools else st.container())
+    with box:
+        try:
+            st.dataframe(out, hide_index=True, width="stretch", height=420, column_config=_cfg)
+        except TypeError:                      # older Streamlit
+            st.dataframe(out, hide_index=True, use_container_width=True, height=420, column_config=_cfg)
     st.download_button("Download CSV", out.to_csv(index=False).encode("utf-8"), "usda_flash_sales.csv", "text/csv", key="flash_csv")
     n_hist = int((g["source"] == "history").sum())
     st.caption(
