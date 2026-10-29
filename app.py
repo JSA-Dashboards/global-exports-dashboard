@@ -155,6 +155,32 @@ _CHART_CONFIG = {
     "modeBarButtonsToRemove": ["lasso2d", "select2d"],
     "toImageButtonOptions":   {"format": "png", "scale": 2, "filename": "jsa_export_chart"},
 }
+def _fresh_modules() -> None:
+    """Streamlit Cloud pulls every push but keeps the project modules the process already imported (png_tools, vessel_tab, vessel_mirror)
+    until the app is rebooted, so a pushed change to one of them silently does not run. Sign the project's modules (name and mtime);
+    when the signature has moved, forget those modules so the imports below load the new code, and empty st.cache_data (its functions
+    live in them). On a fresh process nothing is loaded yet and this only records the signature. It lives on `sys`, which outlives the
+    script's own reruns; app.py itself is left out (it is re-read anyway)."""
+    try:
+        here = Path(__file__).resolve().parent
+        files = [p for p in [*here.glob("*.py"), *(here / "vessel_mirror").rglob("*.py")] if p.name != Path(__file__).name]
+        sig = tuple(sorted((str(p.relative_to(here)), p.stat().st_mtime_ns) for p in files))
+        if getattr(sys, "_jsa_gex_code", None) == sig:
+            return
+        sys._jsa_gex_code = sig
+        for name, mod in list(sys.modules.items()):
+            f = getattr(mod, "__file__", None)
+            if not f or name == "__main__":
+                continue
+            p = Path(f).resolve()
+            if here in p.parents and ".venv" not in p.parts and "site-packages" not in p.parts:
+                sys.modules.pop(name, None)
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
+_fresh_modules()
 try:
     import png_tools                    # a PNG button above every chart and table (the component needs Streamlit >= 1.51)
 except Exception:

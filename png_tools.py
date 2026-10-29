@@ -22,6 +22,7 @@ Streamlit Cloud keeps imported modules for the life of the process: after editin
 import datetime as _dt
 import html as _html
 import re
+import uuid as _uuid
 
 import streamlit as st
 
@@ -277,11 +278,14 @@ def fig_title(fig) -> str:
 
 def _seen() -> dict:
     """A dict that is new for every script or fragment run, so the same title drawn twice in a run can be told apart (and keys count
-    from zero in each run). Outside a run it never resets, which only means the keys keep growing."""
+    from zero in each run, which keeps a chart's key the same from one rerun to the next). `ctx.cursors` is a new dict at the start of
+    every run on every Streamlit tried (1.56, 1.64); the sets this used before, widget_ids_this_run and widget_user_keys_this_run, are
+    gone from 1.64, where a counter built on them never reset and the keys grew with each rerun. Outside a run, or if the attribute
+    ever goes too, the counter never resets: keys stay unique, they just keep growing."""
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
         ctx = get_script_run_ctx()
-        marker = ctx.widget_ids_this_run                        # replaced by a new set at the start of every run
+        marker = ctx.cursors
         if getattr(ctx, "_jsa_png_run", None) is not marker:
             ctx._jsa_png_run = marker                           # (holding it also keeps its id from being reused)
             ctx._jsa_png_seen = {}
@@ -316,8 +320,18 @@ def button(kind: str, key: str, name: str, title: str = "", subtitle: str = "", 
 def chart(plot, fig, kw: dict, name: str | None = None):
     """Draw `fig` with plot(fig, **kw) (st.plotly_chart) under a PNG button. A button that cannot be drawn never costs the chart."""
     title = fig_title(fig)
-    key = unique_key(slug(kw.get("key") or title or "chart"))
-    with st.container(key=f"pngwrap_{key}"):
+    base = slug(kw.get("key") or title or "chart")
+    box = key = None
+    for attempt in range(3):                                    # a key that is somehow taken (Streamlit refuses duplicates) is varied
+        key = unique_key(base) if attempt == 0 else f"{base}_{_uuid.uuid4().hex[:6]}"
+        try:
+            box = st.container(key=f"pngwrap_{key}")
+            break
+        except Exception:
+            box = None
+    if box is None:
+        return plot(fig, **kw)                                  # no button rather than no chart
+    with box:
         try:
             button("chart", key, name or f"{slug(title or 'jsa_chart')}_{stamp()}")
         except Exception:
