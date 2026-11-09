@@ -903,14 +903,16 @@ def _load_census_gats(commodity: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
-    """USDA FGIS grain inspections via Socrata → DataFrame(year,month,tmt). No key needed."""
+    """USDA FGIS grain inspections via Socrata → DataFrame(year,month,tmt,last_week). No key needed.
+    last_week = the latest week-ending date among that month's rows; the newest one across all rows is the
+    latest week FGIS has posted (a month is only complete once that week reaches its last day)."""
     import http.client
     grain = _SOCRATA_GRAIN.get(commodity)
     if not grain:
         return pd.DataFrame()
     try:
         params = urllib.parse.urlencode({
-            "$select": "year,month,sum(mt) as total_mt",
+            "$select": "year,month,sum(mt) as total_mt,max(date) as last_week",
             "$where":  f"grain='{grain}'",
             "$group":  "year,month",
             "$limit":  "600",
@@ -926,9 +928,12 @@ def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
         if resp.status != 200:
             return pd.DataFrame()
         rows = json.loads(body.decode("utf-8"))
-        out  = [{"year": int(r["year"]), "month": int(r["month"]),
-                 "tmt": float(r["total_mt"]) / 1000}
-                for r in rows]
+        out: list = []
+        for r in rows:
+            ts = pd.to_datetime(r.get("last_week"), errors="coerce")
+            out.append({"year": int(r["year"]), "month": int(r["month"]),
+                        "tmt": float(r["total_mt"]) / 1000,
+                        "last_week": None if pd.isna(ts) else ts.date()})
         return pd.DataFrame(out) if out else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -994,8 +999,11 @@ def _load_us_auto(commodity: str) -> dict:
     as the daily email, so the dashboard and the email agree on the US number.
     Wheat, and any case where Census is unavailable, keeps the older FGIS-inspections fill below.
 
-    FGIS is capped at the previous complete calendar month — the current month is
-    always partial (FGIS reports weekly; mid-month only a fraction of weeks are in).
+    A month is filled from FGIS only once FGIS has posted the week that holds the month's last day, the
+    same full-month rule as the ESR estimate above, so the newest month stays blank until its last week is
+    in rather than showing a part-month total. FGIS posts each week on Monday, so a month completes 4-10
+    days after it ends. If FGIS's latest week cannot be read, the fallback is the previous complete
+    calendar month (the current month is always partial).
     """
     esr_code = _US_ESR_CODE.get(commodity)
     if esr_code:
@@ -1011,10 +1019,17 @@ def _load_us_auto(commodity: str) -> dict:
 
     records: dict = {}
     fgis_df = _load_fgis_inspections(commodity)
+    posted = ([w for w in fgis_df["last_week"] if w is not None and not pd.isna(w)]
+              if "last_week" in fgis_df else [])
+    last_wk = max(posted) if posted else None             # latest week-ending date FGIS has posted
     for _, row in fgis_df.iterrows():
         key = (int(row["year"]), int(row["month"]))
-        if key <= fgis_cap:
-            records[key] = float(row["tmt"])
+        if key > fgis_cap:
+            continue
+        month_end = datetime(key[0] + (key[1] == 12), key[1] % 12 + 1, 1).date() - timedelta(days=1)
+        if last_wk is not None and month_end > last_wk:
+            continue                                      # the week holding its last day is not posted yet
+        records[key] = float(row["tmt"])
     gats_df = _load_census_gats(commodity)
     for _, row in gats_df.iterrows():
         records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
