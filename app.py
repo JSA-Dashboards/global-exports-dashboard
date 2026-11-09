@@ -939,9 +939,11 @@ def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# USDA ESR commodity codes used to estimate US months Census has not published yet: the same
-# set and method as the daily email (etl.us_series), so the two show the same US number.
-_US_ESR_CODE = {"corn": 401, "soybeans": 801, "soybeanmeal": 901}
+# US months Census has not published yet are filled from a weekly series scaled to Census, the same method as the
+# daily email (etl.us_series), so the two show the same US number: FGIS export inspections for corn and soybeans,
+# USDA ESR export shipments for soybean meal (FGIS inspects grain, not meal). Wheat keeps the raw FGIS fill.
+_US_FGIS_SCALED = ("corn", "soybeans")
+_US_ESR_CODE = {"soybeanmeal": 901}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -967,16 +969,16 @@ def _esr_us_monthly(esr_code: int) -> tuple:
     return out, max(weeks)
 
 
-def _us_estimates(esr_code: int, census: dict) -> dict:
-    """Months after Census's latest: ESR shipments scaled by the last 3 months' Census/ESR ratio,
-    only for months ESR has fully reported (identical to the email's etl.us_series)."""
-    esr, last_wk = _esr_us_monthly(esr_code)
-    if not esr or not last_wk or not census:
+def _scaled_estimates(src: dict, last_wk, census: dict) -> dict:
+    """Months after Census's latest, from a weekly series (src: TMT by month, FGIS or ESR) scaled by the last
+    3 months' Census/src ratio, only for months whose last day falls in a week the source has posted (last_wk).
+    Identical to the email's etl.us_series."""
+    if not src or not last_wk or not census:
         return {}
-    cal = [k for k in sorted(census) if k in esr][-3:]
+    cal = [k for k in sorted(census) if k in src][-3:]
     if len(cal) < 3:
         return {}
-    ratio = sum(census[k] for k in cal) / sum(esr[k] for k in cal)
+    ratio = sum(census[k] for k in cal) / sum(src[k] for k in cal)
     if not 0.7 <= ratio <= 1.3:
         return {}
     est: dict = {}
@@ -984,33 +986,64 @@ def _us_estimates(esr_code: int, census: dict) -> dict:
     while True:
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
         month_end = datetime(y + (m == 12), m % 12 + 1, 1).date() - timedelta(days=1)
-        if (y, m) not in esr or month_end > last_wk:
+        if (y, m) not in src or month_end > last_wk:
             break
-        est[(y, m)] = esr[(y, m)] * ratio
+        est[(y, m)] = src[(y, m)] * ratio
     return est
+
+
+def _us_estimates(esr_code: int, census: dict) -> dict:
+    """The estimate from USDA ESR export shipments (soybean meal)."""
+    esr, last_wk = _esr_us_monthly(esr_code)
+    return _scaled_estimates(esr, last_wk, census)
+
+
+def _fgis_us_monthly(commodity: str) -> tuple:
+    """FGIS export inspections by certificate month. Returns ({(year, month): TMT}, the latest week-ending FGIS
+    has posted, or None when that cannot be read)."""
+    df = _load_fgis_inspections(commodity)
+    if df.empty:
+        return {}, None
+    posted = ([w for w in df["last_week"] if w is not None and not pd.isna(w)]
+              if "last_week" in df else [])
+    return ({(int(r["year"]), int(r["month"])): float(r["tmt"]) for _, r in df.iterrows()},
+            max(posted) if posted else None)
+
+
+def _us_est_how(commodity: str) -> str:
+    """Legend wording for the US EST cells: which weekly series fills a month Census has not published yet."""
+    if commodity in _US_FGIS_SCALED:
+        return " — FGIS export inspections scaled to Census"
+    if commodity in _US_ESR_CODE:
+        return " — USDA export shipments scaled to Census"
+    return " — FGIS export inspections"                     # wheat: the raw FGIS fill
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_us_auto(commodity: str) -> dict:
     """US monthly exports → {(year, month): tmt}.
 
-    Census GATS is official (~5-6 week lag). For corn, soybeans and meal, months Census has not
-    published yet are estimated from USDA ESR export shipments scaled to Census, the same method
-    as the daily email, so the dashboard and the email agree on the US number.
-    Wheat, and any case where Census is unavailable, keeps the older FGIS-inspections fill below.
-
-    A month is filled from FGIS only once FGIS has posted the week that holds the month's last day, the
-    same full-month rule as the ESR estimate above, so the newest month stays blank until its last week is
-    in rather than showing a part-month total. FGIS posts each week on Monday, so a month completes 4-10
-    days after it ends. If FGIS's latest week cannot be read, the fallback is the previous complete
+    Census GATS is official (~5-6 week lag). Months Census has not published yet are estimated from a weekly
+    series scaled to Census, the same method as the daily email, so the dashboard and the email agree on the US
+    number: FGIS export inspections for corn and soybeans, USDA ESR export shipments for soybean meal (FGIS
+    inspects grain, not meal). Either way a month is filled only once the week holding its last day is posted
+    (FGIS posts on Mondays, ESR on Thursdays), so the newest month stays blank until then rather than
+    showing a part-month total.
+    Wheat, and any case where Census is unavailable, keeps the older raw FGIS-inspections fill below, under
+    the same full-month rule. If FGIS's latest week cannot be read, the fallback is the previous complete
     calendar month (the current month is always partial).
     """
     esr_code = _US_ESR_CODE.get(commodity)
-    if esr_code:
+    if commodity in _US_FGIS_SCALED or esr_code:
         census = {(int(r["year"]), int(r["month"])): float(r["tmt"])
                   for _, r in _load_census_gats(commodity).iterrows()}
         if census:
-            return {**_us_estimates(esr_code, census), **census}
+            if esr_code:
+                est = _us_estimates(esr_code, census)
+            else:
+                fgis, fgis_wk = _fgis_us_monthly(commodity)
+                est = _scaled_estimates(fgis, fgis_wk, census)
+            return {**est, **census}
 
     now = pd.Timestamp.now()
     # Last fully-complete calendar month (current month is always partial in FGIS)
@@ -1018,18 +1051,14 @@ def _load_us_auto(commodity: str) -> dict:
     fgis_cap = (int(prev.year), int(prev.month))
 
     records: dict = {}
-    fgis_df = _load_fgis_inspections(commodity)
-    posted = ([w for w in fgis_df["last_week"] if w is not None and not pd.isna(w)]
-              if "last_week" in fgis_df else [])
-    last_wk = max(posted) if posted else None             # latest week-ending date FGIS has posted
-    for _, row in fgis_df.iterrows():
-        key = (int(row["year"]), int(row["month"]))
+    fgis, last_wk = _fgis_us_monthly(commodity)            # last_wk: latest week-ending date FGIS has posted
+    for key, tmt in fgis.items():
         if key > fgis_cap:
             continue
         month_end = datetime(key[0] + (key[1] == 12), key[1] % 12 + 1, 1).date() - timedelta(days=1)
         if last_wk is not None and month_end > last_wk:
             continue                                      # the week holding its last day is not posted yet
-        records[key] = float(row["tmt"])
+        records[key] = tmt
     gats_df = _load_census_gats(commodity)
     for _, row in gats_df.iterrows():
         records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
@@ -3202,8 +3231,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     is_import_field = field in cfg["import_fields"]
     st.markdown(_info_strip_html(field_label, is_import_field, unit_long, my_label, cy, ly, oly_label),
                 unsafe_allow_html=True)
-    _est_how = (" — USDA export shipments scaled to Census"
-                if field == "US" and commodity in _US_ESR_CODE else "")
+    _est_how = _us_est_how(commodity) if field == "US" else ""
     st.markdown(_table_legend_html(cy, has_estimates, _est_how), unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
@@ -3769,7 +3797,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # ── Info strip and legend ────────────────────────────────────────────
     st.markdown(_info_strip_html(field_label, False, unit_long, my_label, cy, ly, oly_label),
                 unsafe_allow_html=True)
-    st.markdown(_table_legend_html(cy, has_estimates), unsafe_allow_html=True)
+    st.markdown(_table_legend_html(cy, has_estimates, _us_est_how("wheat") if field == "US" else ""),
+                unsafe_allow_html=True)
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Wheat aggregate tabs (TotalNonUS, MajorExporter) are skipped — too many
