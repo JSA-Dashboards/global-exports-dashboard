@@ -539,8 +539,10 @@ def _add_chart_watermark(fig: go.Figure, logo_b64: str | None = None) -> go.Figu
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data(commodity: str) -> pd.DataFrame:
-    """Build monthly export DataFrame from APIs (Census GATS/FGIS for US; TDM for non-US).
-    Non-US comes from Snowflake and raises if it cannot be read, so a failure is never cached."""
+    """Build monthly export DataFrame from APIs (Census GATS plus the FGIS/ESR estimate for US; TDM for non-US).
+    Non-US comes from Snowflake and raises if it cannot be read, so a failure is never cached.
+    This is cached for an hour on THIS function's own source, not on _load_us_auto's: when the US method changes,
+    edit this docstring too, or the old US column is served until the hour is up."""
     cfg  = COMMODITY_CONFIG[commodity]
     now  = pd.Timestamp.now().replace(day=1)
     dates = pd.date_range("2010-01-01", now, freq="MS")
