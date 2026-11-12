@@ -7189,6 +7189,545 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         )
 
 
+# ═══ NEW TABS BEGIN (sorghum, ethanol, animal fats) ═══
+# ─────────────────────────────────────────────────────────────────────────────
+# SORGHUM, ETHANOL AND ANIMAL FATS TABS
+# Sorghum: China imports + US and Brazil exports. Ethanol: US and Brazil exports. Animal fats: US imports.
+# The US legs come from the US Census Bureau trade API (monthly totals, and by country on request). China's and Brazil's legs belong to the
+# TDM API keys that were issued for them: _NT_TDM_FEEDS names the TDM product each key unlocks, read from TDM_PARTNER_MONTHLY; a feed with
+# no product yet shows "not connected" instead of a guess.
+# ─────────────────────────────────────────────────────────────────────────────
+_NT_CENSUS = {"E": "https://api.census.gov/data/timeseries/intltrade/exports/hs",
+              "I": "https://api.census.gov/data/timeseries/intltrade/imports/hs"}
+_NT_FIELDS = {"E": ("E_COMMODITY", "QTY_1_MO", "ALL_VAL_MO"), "I": ("I_COMMODITY", "GEN_QY1_MO", "GEN_VAL_MO")}
+_NT_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_NT_L_PER_GAL = 3.78541
+_NT_MLB_PER_TMT = 2.20462                 # million pounds per thousand metric tons
+_NT_MBU_PER_TMT_SORGHUM = 0.039368        # sorghum is 56 lb a bushel
+_NT_SORGHUM_PATTERN = "1007*"             # grain sorghum (unit T) and sorghum seed (unit KG)
+_NT_ETHANOL_HS10 = ["2207106010", "2207106090", "2207200010", "2207200090"]   # the four non-beverage lines (= EIA fuel ethanol)
+_NT_FAT_PATTERNS = ["0209*", "1501*", "1502*", "1503*", "1506*", "1516100000", "1518*"]
+_NT_FAT_GROUPS = ["Tallow", "Poultry fat", "Lard & pig fat", "Other animal fats"]
+_NT_UCO = "Used cooking oil & mixed fats"
+_NT_FAT_ALL = "All animal fats"
+_NT_TDM_FEEDS = {
+    # products = the TDM product codes as stored in TDM_PARTNER_MONTHLY.product_code; empty until TDM says what each key unlocks
+    "cn_sorghum_imports": dict(reporter="CN", flow="I", products=(), label="China sorghum imports", key="TDM China key"),
+    "br_sorghum_exports": dict(reporter="BR", flow="E", products=(), label="Brazil sorghum exports", key="TDM Brazil key"),
+    "br_ethanol_exports": dict(reporter="BR", flow="E", products=(), label="Brazil ethanol exports", key="TDM Brazil key"),
+}
+
+
+def _nt_fat_group(code: str) -> str:
+    """The animal-fat group of a US import HS10 line."""
+    if code.startswith("1502"):
+        return "Tallow"
+    if code in ("1501900000", "0209900000"):
+        return "Poultry fat"
+    if code.startswith(("1501", "0209")):
+        return "Lard & pig fat"
+    if code.startswith("1518"):
+        return _NT_UCO
+    return "Other animal fats"
+
+
+def _nt_census_fetch(flow: str, code: str, by_country: bool, start: str) -> list:
+    """One Census call for an HS10 code or a wildcard such as '1502*': tuples (cty_code, country, code, qty, unit, value, year, month).
+    Raises when the call keeps failing, so st.cache_data never keeps an outage."""
+    import requests
+    code_f, qty_f, val_f = _NT_FIELDS[flow]
+    get = (["CTY_CODE", "CTY_NAME"] if by_country else []) + [code_f, qty_f, "UNIT_QY1", val_f]
+    params = {"get": ",".join(get), "COMM_LVL": "HS10", code_f: code, "time": f"from {start} to {datetime.now().year}-12", "key": CENSUS_API_KEY}
+    last: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = requests.get(_NT_CENSUS[flow], params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=120)
+        except Exception as e:                       # network blip: try again
+            last = e
+            time.sleep(1 + attempt)
+            continue
+        if r.status_code == 204 or not r.text.strip():
+            return []                                # the code has no trade in the window
+        if r.status_code != 200 or r.text.lstrip().startswith("<"):
+            last = RuntimeError(f"Census API answered HTTP {r.status_code}")
+            time.sleep(1 + attempt)
+            continue
+        try:
+            rows = r.json()
+        except ValueError as e:
+            last = e
+            continue
+        h = rows[0]
+        ci, ni = (h.index("CTY_CODE"), h.index("CTY_NAME")) if by_country else (None, None)
+        gi, qi, ui, vi, ti = h.index(code_f), h.index(qty_f), h.index("UNIT_QY1"), h.index(val_f), h.index("time")
+        out = []
+        for x in rows[1:]:
+            try:
+                year, month = (int(p) for p in x[ti].split("-")[:2])
+                out.append((x[ci] if ci is not None else "", x[ni] if ni is not None else "", x[gi],
+                            float(x[qi] or 0), x[ui], float(x[vi] or 0), year, month))
+            except (ValueError, TypeError, IndexError):
+                continue
+        return out
+    raise RuntimeError(f"Census {code}: {last}")
+
+
+def _nt_census_frame(flow: str, codes: list, by_country: bool, start: str) -> pd.DataFrame:
+    """Several Census calls at once (plain threads: nothing here touches Streamlit) -> one frame with the columns
+    cty_code, country, code, qty, unit, value, year, month. By country, the region aggregates are dropped (real country codes are 4 digits, 1000+)."""
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        parts = list(pool.map(lambda c: _nt_census_fetch(flow, c, by_country, start), codes))
+    rows = [r for part in parts for r in part]
+    df = pd.DataFrame(rows, columns=["cty_code", "country", "code", "qty", "unit", "value", "year", "month"])
+    if by_country and not df.empty:
+        df = df[df["cty_code"].str.isdigit() & (pd.to_numeric(df["cty_code"], errors="coerce") >= 1000)].copy()
+        df["country"] = df["country"].str.title()
+    return df
+
+
+def _nt_sorghum_tmt(df: pd.DataFrame) -> pd.Series:
+    """Thousand metric tons from Census sorghum rows (unit T = tonnes, KG = kilograms)."""
+    return df.apply(lambda r: (r["qty"] if r["unit"] == "T" else r["qty"] / 1000.0) / 1000.0, axis=1) if not df.empty else pd.Series(dtype=float)
+
+
+def _nt_sorghum_raw(by_country: bool = False) -> pd.DataFrame:
+    """US sorghum exports (HS 1007, grain + seed), monthly since 2015: year, month, tmt, value [, country]."""
+    df = _nt_census_frame("E", [_NT_SORGHUM_PATTERN], by_country, "2015-01" if not by_country else "2018-01")
+    df["tmt"] = _nt_sorghum_tmt(df)
+    keys = ["year", "month"] + (["country"] if by_country else [])
+    return df.groupby(keys, as_index=False).agg(tmt=("tmt", "sum"), value=("value", "sum"))
+
+
+def _nt_ethanol_raw(by_country: bool = False) -> pd.DataFrame:
+    """US fuel-ethanol exports (the four non-beverage HS10 lines, litres), monthly: year, month, mgal, value [, country]."""
+    df = _nt_census_frame("E", _NT_ETHANOL_HS10, by_country, "2015-01" if not by_country else "2018-01")
+    df = df[df["unit"] == "L"].copy()                        # a line that changed unit would otherwise be summed wrongly
+    df["mgal"] = df["qty"] / _NT_L_PER_GAL / 1e6
+    keys = ["year", "month"] + (["country"] if by_country else [])
+    return df.groupby(keys, as_index=False).agg(mgal=("mgal", "sum"), value=("value", "sum"))
+
+
+def _nt_fats_raw(by_country: bool = False) -> pd.DataFrame:
+    """US animal-fat imports (general imports, kilograms), monthly: group, year, month, tmt, value [, country]."""
+    df = _nt_census_frame("I", _NT_FAT_PATTERNS, by_country, "2015-01" if not by_country else "2018-01")
+    df = df[df["unit"] == "KG"].copy()
+    df["group"] = df["code"].map(_nt_fat_group)
+    df["tmt"] = df["qty"] / 1e6
+    keys = ["group", "year", "month"] + (["country"] if by_country else [])
+    return df.groupby(keys, as_index=False).agg(tmt=("tmt", "sum"), value=("value", "sum"))
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nt_totals() -> dict:
+    """The three tabs' US monthly totals {'sorghum': df, 'ethanol': df, 'fats': df}, fetched at the same time (plain threads: the loaders
+    touch no Streamlit), so the first visit waits for the slowest Census call rather than for all of them. Raises if any fails (not cached)."""
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = {"sorghum": pool.submit(_nt_sorghum_raw, False), "ethanol": pool.submit(_nt_ethanol_raw, False),
+                "fats": pool.submit(_nt_fats_raw, False)}
+        return {k: f.result() for k, f in futs.items()}
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nt_sorghum_countries() -> pd.DataFrame:
+    return _nt_sorghum_raw(True)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nt_ethanol_countries() -> pd.DataFrame:
+    return _nt_ethanol_raw(True)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _nt_fats_countries() -> pd.DataFrame:
+    return _nt_fats_raw(True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _nt_tdm_feed(feed: str):
+    """A TDM feed's partner-months from Snowflake (country, year, month, vol, value), or None while the feed is not connected: no product
+    code set in _NT_TDM_FEEDS, or nothing loaded yet. A Snowflake failure raises, so it is not cached."""
+    cfg = _NT_TDM_FEEDS[feed]
+    if not cfg["products"]:
+        return None
+    for attempt in (1, 2):
+        conn = _get_sf_conn()
+        if conn is None:
+            raise RuntimeError("Snowflake credentials are not configured for this app")
+        try:
+            cur = conn.cursor()
+            marks = ",".join(["%s"] * len(cfg["products"]))
+            cur.execute("SELECT partner_name, year, month, tmt, value_usd FROM TDM_PARTNER_MONTHLY "
+                        f"WHERE reporter = %s AND flow = %s AND product_code IN ({marks})",
+                        (cfg["reporter"], cfg["flow"], *cfg["products"]))
+            rows = cur.fetchall()
+            break
+        except Exception as e:
+            if "does not exist" in str(e).lower():
+                return None
+            if attempt == 2:
+                raise
+            _get_sf_conn.clear()
+    if not rows:
+        return None
+    df = pd.DataFrame(rows, columns=["country", "year", "month", "vol", "value"])
+    for c in ("year", "month"):
+        df[c] = df[c].astype(int)
+    for c in ("vol", "value"):
+        df[c] = df[c].astype(float)
+    return df
+
+
+def _nt_series(df: pd.DataFrame | None, col: str) -> dict:
+    """{(year, month): value} summed over everything else in the frame."""
+    if df is None or df.empty:
+        return {}
+    g = df.groupby(["year", "month"])[col].sum()
+    return {(int(y), int(m)): float(v) for (y, m), v in g.items()}
+
+
+def _nt_pivot(series: dict, start_month: int, scale: float = 1.0):
+    """{(year, month): value} -> ({Mon: {year label: value}}, month names in order, year labels). A marketing year starting in `start_month`
+    is labelled '2026/27'; a calendar year (start_month 1) just '2026'."""
+    nums = [((start_month - 1 + i) % 12) + 1 for i in range(12)]
+    months = [_NT_MON[n - 1] for n in nums]
+    pivot = {m: {} for m in months}
+    for (y, m), v in series.items():
+        label = str(y) if start_month == 1 else (lambda s: f"{s}/{str(s + 1)[-2:]}")(y if m >= start_month else y - 1)
+        pivot[_NT_MON[m - 1]][label] = v * scale
+    return pivot, months, sorted({lbl for d in pivot.values() for lbl in d})
+
+
+def _nt_tile(label: str, series: dict, start_month: int, accent: str, is_import: bool = False, scale: float = 1.0):
+    """One card for the tile grid: the newest month and the marketing year to date, each against last year and the 6-year Olympic average."""
+    pivot, months, all_years = _nt_pivot(series, start_month, scale)
+    if not all_years:
+        return None
+    cy = all_years[-1]
+    ly = all_years[-2] if len(all_years) >= 2 else None
+    complete = [y for y in get_complete_years(pivot, months[-1]) if y != cy]
+    oly = sorted(complete)[-6:]
+    latest = next((m for m in reversed(months) if pivot[m].get(cy) is not None), None)
+    if latest is None:
+        return None
+    val = pivot[latest][cy]
+    cum = build_cumulative_pivot(pivot, all_years, months)
+    cy_cum, ly_cum = cum[latest].get(cy), (cum[latest].get(ly) if ly else None)
+    return dict(label=label, my_label=f"{months[0]}–{months[-1]}", cy=cy, latest_month=latest, accent=accent, is_import=is_import,
+                monthly_val=val, pct_ly_m=_pct(val, pivot[latest].get(ly) if ly else None),
+                pct_oly_m=_pct(val, olympic_avg([pivot[latest].get(y) for y in oly])),
+                cum_val=cy_cum, pct_ly_c=_pct(cy_cum, ly_cum),
+                pct_oly_c=_pct(cy_cum, olympic_avg([cum[latest].get(y) for y in oly])), est=False, pending=None)
+
+
+def _nt_compare_fig(lines: list, unit: str, dec: int, months_back: int = 36) -> go.Figure:
+    """Monthly volumes of several series on one axis: lines = [(name, {(y, m): v}, colour)]."""
+    fig = go.Figure()
+    for name, series, color in lines:
+        keys = sorted(series)[-months_back:]
+        fig.add_trace(go.Scatter(x=[pd.Timestamp(y, m, 1) for y, m in keys], y=[series[k] for k in keys], name=name, mode="lines+markers",
+                                 line=dict(color=color, width=2.5), marker=dict(size=5, color=color),
+                                 hovertemplate="%{x|%b %Y}: %{y:,." + str(dec) + "f} " + unit + "<extra>" + name + "</extra>"))
+    fig.update_layout(**_ch_layout(None, None, None, unit, height=360, margin=dict(l=70, r=20, t=24, b=50)))
+    fig.update_xaxes(tickformat="%b %Y", dtick="M3")
+    fig.update_yaxes(tickformat=",")
+    return fig
+
+
+def _nt_series_view(series: dict, start_month: int, unit: str, unit_long: str, dec: int, key: str, field_label: str,
+                    commodity_label: str, is_import: bool, source: str, scale: float = 1.0) -> None:
+    """The commodity tabs' country view for one series: title, info strip, legend, monthly and cumulative tables by year, seasonal chart."""
+    pivot, months, all_years = _nt_pivot(series, start_month, scale)
+    if not all_years:
+        st.info("No data loaded for this series yet.")
+        return
+    cy = all_years[-1]
+    ly = all_years[-2] if len(all_years) >= 2 else None
+    complete = [y for y in get_complete_years(pivot, months[-1]) if y != cy]
+    my_label = f"{months[0]}–{months[-1]}"
+    st.markdown(_view_title_html(field_label, commodity_label, is_import, unit), unsafe_allow_html=True)
+    st.markdown(_info_strip_html(field_label, is_import, unit_long, my_label, cy, ly, " → ".join(sorted(complete)[-6:]) or "N/A"),
+                unsafe_allow_html=True)
+    st.markdown(_table_legend_html(cy, False), unsafe_allow_html=True)
+    m_stats = compute_stats(pivot, all_years, complete, cy, ly, months, is_cumulative=False)
+    cum = build_cumulative_pivot(pivot, all_years, months)
+    c_stats = compute_stats(cum, all_years, complete, cy, ly, months, is_cumulative=True)
+    what = f"{field_label} {commodity_label}"
+    t_monthly, t_cum = st.tabs(["📊  Monthly", "📈  Cumulative"])
+    with t_monthly:
+        _show_table(pivot, render_table_html(pivot, m_stats, all_years, cy, ly, months, dec), f"{key}_monthly",
+                    f"{what}: monthly ({unit})", f"{my_label} · {source}")
+    with t_cum:
+        _show_table(cum, render_table_html(cum, c_stats, all_years, cy, ly, months, dec), f"{key}_cumulative",
+                    f"{what}: cumulative ({unit})", f"{my_label} · {source}")
+    for_cum = st.toggle("Seasonal chart: cumulative", value=False, key=f"{key}_seas_cum")
+    chart_pivot = cum if for_cum else pivot
+    st.plotly_chart(make_seasonal_chart(chart_pivot, all_years, cy, complete, field_label, for_cum, months, None, unit),
+                    use_container_width=True)
+
+
+def _nt_partner_block(df: pd.DataFrame, noun: str, owner: str, verb: str, unit: str, dec: int, key: str, source: str) -> None:
+    """Where a country's volume went (exports) or came from (imports): period picker, KPIs, top countries against a year earlier, the last
+    24 months stacked by country, and the detail table. df: country, year, month, vol (in `unit`), value (USD)."""
+    df = df[df["vol"] > 0].copy() if not df.empty else df
+    if df.empty:
+        st.info(f"No {verb} by {noun} are loaded yet.")
+        return
+    Noun = noun.capitalize()
+    df["ym"] = df["year"] * 12 + df["month"] - 1
+    last_ym, first_ym = int(df["ym"].max()), int(df["ym"].min())
+    ly = last_ym // 12
+
+    def mon(ym):
+        return f"{_NT_MON[ym % 12]} {ym // 12}"
+
+    options = {"Latest month": (last_ym, last_ym), "Last 3 months": (last_ym - 2, last_ym), "Last 12 months": (last_ym - 11, last_ym),
+               f"{ly} year to date": (ly * 12, last_ym)}
+    for y in range(ly - 1, first_ym // 12 - 1, -1):
+        if y * 12 >= first_ym:
+            options[f"{y} calendar year"] = (y * 12, y * 12 + 11)
+    c_per, c_top = st.columns([2, 3])
+    with c_per:
+        per_label = st.selectbox("Period", list(options), index=2, key=f"{key}_period")
+    with c_top:
+        top_n = st.slider(f"{Noun}s shown", 5, 25, 12, key=f"{key}_topn")
+    start, end = options[per_label]
+    cur = df[(df["ym"] >= start) & (df["ym"] <= end)]
+    pri = df[(df["ym"] >= start - 12) & (df["ym"] <= end - 12)]
+    have_prior = start - 12 >= first_ym
+    by = cur.groupby("country").agg(vol=("vol", "sum"), value=("value", "sum")).reset_index()
+    by["prior"] = by["country"].map(pri.groupby("country")["vol"].sum()).fillna(0.0)
+    by = by.sort_values("vol", ascending=False)
+    if by.empty:
+        st.info(f"No {verb} in that period.")
+        return
+    total, prior_total = by["vol"].sum(), pri["vol"].sum()
+    span = mon(start) if start == end else f"{mon(start)} – {mon(end)}"
+    k1, k2, k3, k4 = st.columns([1.7, 1.2, 1.3, 0.8])
+    k1.metric(f"{owner} {verb} ({span})", f"{total:,.{dec}f} {unit}")
+    if have_prior and prior_total > 0:
+        k2.metric("vs same months a year earlier", f"{(total / prior_total - 1) * 100:+.1f}%", help=f"{prior_total:,.{dec}f} {unit} a year earlier")
+    top = by.iloc[0]
+    k3.metric(f"Largest {noun}", top["country"], f"{top['vol'] / total * 100:.0f}% of volume", delta_color="off")
+    k4.metric(f"{Noun}s", f"{len(by)}")
+    show = by.head(top_n)
+    col_bar, col_trend = st.columns(2)
+    with col_bar:
+        st.markdown(f"#### Top {top_n} {noun}s — {span}")
+        fig = go.Figure()
+        if have_prior:
+            fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier", marker_color=_CH_MIST))
+        fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=_CH_BLUE,
+                             text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside",
+                             textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        fig.update_layout(**_ch_layout(None, None, unit, None, hover="closest", height=max(340, len(show) * 34),
+                                       margin=dict(l=10, r=50, t=44, b=10)))
+        fig.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                                       bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig.update_xaxes(tickformat=",")
+        fig.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
+        st.plotly_chart(fig, use_container_width=True)
+    with col_trend:
+        st.markdown(f"#### Monthly {verb} by {noun} — last 24 months")
+        t_start = max(first_ym, last_ym - 23)
+        win = df[df["ym"] >= t_start]
+        lead = list(win.groupby("country")["vol"].sum().sort_values(ascending=False).head(7).index)
+        win = win.assign(dest=win["country"].where(win["country"].isin(lead), "All other"))
+        mo = win.groupby(["ym", "dest"])["vol"].sum().reset_index()
+        fig2 = go.Figure()
+        palette = _CH_PAL[:7] + [_CH_MIST]
+        for i, d in enumerate(lead + ["All other"]):
+            s = mo[mo["dest"] == d]
+            if not s.empty:
+                fig2.add_trace(go.Bar(x=[mon(v) for v in s["ym"]], y=s["vol"], name=d, marker_color=palette[i]))
+        fig2.update_layout(**_ch_layout(None, None, None, unit, height=max(340, len(show) * 34), margin=dict(l=10, r=10, t=10, b=10)))
+        fig2.update_layout(barmode="stack", legend=dict(orientation="h", y=-0.2, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig2.update_xaxes(categoryorder="array", categoryarray=[mon(v) for v in range(t_start, last_ym + 1)])
+        fig2.update_yaxes(tickformat=",")
+        st.plotly_chart(fig2, use_container_width=True)
+    st.markdown(f"#### {Noun} detail — {span}")
+    tbl = pd.DataFrame({
+        Noun: by["country"], f"Volume ({unit})": by["vol"], "Share": by["vol"] / total * 100,
+        f"Year earlier ({unit})": by["prior"] if have_prior else np.nan,
+        "Change": ((by["vol"] / by["prior"] - 1) * 100).where(by["prior"] > 0) if have_prior else np.nan,
+        "Value ($M)": by["value"] / 1e6,
+    })
+    shown = {f"Volume ({unit})": f"{{:,.{dec}f}}", "Share": "{:.1f}%", f"Year earlier ({unit})": f"{{:,.{dec}f}}",
+             "Change": "{:+.1f}%", "Value ($M)": "${:,.1f}"}
+    box = (png_tools.table(f"{key}_detail", f"{png_tools.slug(Noun)}_detail_{png_tools.stamp()}", f"{Noun} detail: {span} ({unit})",
+                           "Largest first" + (f" · {len(tbl):,} rows, the first 80 shown" if len(tbl) > 80 else ""), f"Source: {source}",
+                           png_tools.table_html(tbl.head(80), shown, index=False))
+           if png_tools else st.container())
+    with box:
+        st.dataframe(tbl, hide_index=True, use_container_width=True, column_config={
+            f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"), "Share": st.column_config.NumberColumn(format="%.1f%%"),
+            f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+            "Change": st.column_config.NumberColumn(format="%+.1f%%"), "Value ($M)": st.column_config.NumberColumn(format="$%,.1f")})
+
+
+def _nt_not_connected(feed: str) -> None:
+    """The notice shown in place of a TDM-fed view whose product is not known yet or whose data is not loaded."""
+    cfg = _NT_TDM_FEEDS[feed]
+    why = ("TDM has not said which product the key unlocks yet" if not cfg["products"]
+           else "its data has not been loaded into TDM_PARTNER_MONTHLY yet")
+    st.info(f"**{cfg['label']}** is not connected: {why}. It comes from the {cfg['key']} (Trade Data Monitor); "
+            "the view appears here as soon as the feed is loaded.")
+
+
+def _nt_pick(options: list, key: str, default: str | None = None) -> str:
+    """A one-line selector that always returns one of the options (the first when nothing is picked)."""
+    pick = st.segmented_control("View", options, default=default or options[0], key=key, label_visibility="collapsed")
+    return pick if pick in options else options[0]
+
+
+@st.fragment
+def _run_sorghum_tab(use_bushels: bool, unit_short: str, unit_decimals: int):
+    """Sorghum: China imports, US exports, Brazil exports. The US leg is live from Census; China and Brazil come from their TDM keys."""
+    scale = _NT_MBU_PER_TMT_SORGHUM if use_bushels else 1.0
+    unit_long = "Million Bushels (Mbu)" if use_bushels else "Thousand Metric Tons (TMT)"
+    try:
+        with st.spinner("Loading US sorghum, ethanol and animal-fat trade from the Census API…"):
+            us_df = _nt_totals()["sorghum"]
+    except Exception as exc:
+        st.error(f"US sorghum exports could not be read from the Census API: {exc}\n\nClick **🔄 Refresh Data** to retry.")
+        return
+    feeds, errs = {}, []
+    for f in ("cn_sorghum_imports", "br_sorghum_exports"):
+        try:
+            feeds[f] = _nt_tdm_feed(f)
+        except Exception as exc:
+            feeds[f] = None
+            errs.append(f"{_NT_TDM_FEEDS[f]['label']}: {exc}")
+    for e in errs:
+        st.warning(e)
+    us, cn, br = _nt_series(us_df, "tmt"), _nt_series(feeds["cn_sorghum_imports"], "vol"), _nt_series(feeds["br_sorghum_exports"], "vol")
+    tiles = [_nt_tile("China", cn, 9, _CH_COUNTRY["China"], True, scale) if cn else None,
+             _nt_tile("United States", us, 9, _CH_COUNTRY["US"], False, scale),
+             _nt_tile("Brazil", br, 9, _CH_COUNTRY["Brazil"], False, scale) if br else None]
+    st.markdown(_render_tile_grid(tiles, unit_short, unit_decimals), unsafe_allow_html=True)
+    if not cn or not br:
+        st.caption("China imports and Brazil exports are not connected yet (their TDM keys are in hand; the product each unlocks is not): "
+                   + ", ".join(n for n, s in (("China imports", cn), ("Brazil exports", br)) if not s) + ".")
+    lines = [(n, {k: v * scale for k, v in s.items()}, c) for n, s, c in
+             (("China imports", cn, _CH_COUNTRY["China"]), ("US exports", us, _CH_COUNTRY["US"]), ("Brazil exports", br, _CH_COUNTRY["Brazil"])) if s]
+    st.markdown(f"#### Monthly sorghum trade ({unit_short}) — last 36 months")
+    st.plotly_chart(_nt_compare_fig(lines, unit_short, unit_decimals), use_container_width=True)
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
+    views = ["United States — exports", "Brazil — exports", "China — imports"]
+    view = _nt_pick(views, "sorg_view")
+    if view.startswith("United States"):
+        _nt_series_view(us, 9, unit_short, unit_long, unit_decimals, "sorg_us", "United States", "Sorghum", False,
+                        "US Census Bureau (HS 1007: grain sorghum and sorghum seed)", scale)
+        if st.toggle("Show where US sorghum went (by destination)", value=False, key="sorg_us_dest_on",
+                     help="One Census call by country; loaded only when asked, then kept for six hours."):
+            try:
+                with st.spinner("Loading destinations from the Census API…"):
+                    d = _nt_sorghum_countries()
+                _nt_partner_block(d.assign(vol=d["tmt"] * scale), "destination", "US sorghum", "exports", unit_short, unit_decimals,
+                                  "sorg_us_dest", "US Census Bureau")
+            except Exception as exc:
+                st.error(f"Destinations could not be read from the Census API: {exc}")
+    else:
+        feed, who, is_imp = (("br_sorghum_exports", "Brazil", False) if view.startswith("Brazil") else ("cn_sorghum_imports", "China", True))
+        df = feeds[feed]
+        if df is None:
+            _nt_not_connected(feed)
+        else:
+            _nt_series_view(_nt_series(df, "vol"), 9, unit_short, unit_long, unit_decimals, f"sorg_{who.lower()}", who if not is_imp else f"{who} Imports",
+                            "Sorghum", is_imp, "Trade Data Monitor (TDM)", scale)
+            with st.expander(f"Where {who}'s sorghum {'came from' if is_imp else 'went'}", expanded=False):
+                _nt_partner_block(df.assign(vol=df["vol"] * scale), "origin" if is_imp else "destination", f"{who} sorghum",
+                                  "imports" if is_imp else "exports", unit_short, unit_decimals, f"sorg_{who.lower()}_partner", "Trade Data Monitor (TDM)")
+    st.caption("US: US Census Bureau monthly exports of HS 1007 (grain sorghum and seed), official figures only; the newest month is as Census has "
+               "published it (about five weeks after month end). Marketing year Sep–Aug for every country, so the three are comparable. "
+               "Weekly US inspections are on the US Inspections tab.")
+
+
+@st.fragment
+def _run_ethanol_tab():
+    """Ethanol exports: US (Census, the four non-beverage HS10 lines = EIA fuel ethanol) and Brazil (TDM key)."""
+    try:
+        with st.spinner("Loading US sorghum, ethanol and animal-fat trade from the Census API…"):
+            us_df = _nt_totals()["ethanol"]
+    except Exception as exc:
+        st.error(f"US ethanol exports could not be read from the Census API: {exc}\n\nClick **🔄 Refresh Data** to retry.")
+        return
+    try:
+        br_df = _nt_tdm_feed("br_ethanol_exports")
+    except Exception as exc:
+        br_df = None
+        st.warning(f"Brazil ethanol exports: {exc}")
+    us, br = _nt_series(us_df, "mgal"), _nt_series(br_df, "vol")
+    tiles = [_nt_tile("United States", us, 1, _CH_COUNTRY["US"], False), _nt_tile("Brazil", br, 1, _CH_COUNTRY["Brazil"], False) if br else None]
+    st.markdown(_render_tile_grid(tiles, "Mgal", 1), unsafe_allow_html=True)
+    if not br:
+        st.caption("Brazil ethanol exports are not connected yet (the TDM Brazil key is in hand; the product it unlocks is not).")
+    lines = [(n, s, c) for n, s, c in (("US exports", us, _CH_COUNTRY["US"]), ("Brazil exports", br, _CH_COUNTRY["Brazil"])) if s]
+    st.markdown("#### Monthly ethanol exports (million gallons) — last 36 months")
+    st.plotly_chart(_nt_compare_fig(lines, "Mgal", 1), use_container_width=True)
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
+    view = _nt_pick(["United States", "Brazil"], "eth_view")
+    if view == "United States":
+        _nt_series_view(us, 1, "Mgal", "Million Gallons (Mgal)", 1, "eth_us", "United States", "Ethanol", False,
+                        "US Census Bureau (HS 2207 non-beverage lines)")
+        if st.toggle("Show where US ethanol went (by destination)", value=False, key="eth_us_dest_on",
+                     help="One Census call per HS line by country; loaded only when asked, then kept for six hours."):
+            try:
+                with st.spinner("Loading destinations from the Census API…"):
+                    d = _nt_ethanol_countries()
+                _nt_partner_block(d.assign(vol=d["mgal"]), "destination", "US ethanol", "exports", "Mgal", 1, "eth_us_dest", "US Census Bureau")
+            except Exception as exc:
+                st.error(f"Destinations could not be read from the Census API: {exc}")
+    elif br_df is None:
+        _nt_not_connected("br_ethanol_exports")
+    else:
+        _nt_series_view(br, 1, "Mgal", "Million Gallons (Mgal)", 1, "eth_br", "Brazil", "Ethanol", False, "Trade Data Monitor (TDM)")
+        with st.expander("Where Brazil's ethanol went (by destination)", expanded=False):
+            _nt_partner_block(br_df, "destination", "Brazil ethanol", "exports", "Mgal", 1, "eth_br_dest", "Trade Data Monitor (TDM)")
+    st.caption("US: Census Bureau monthly exports of the four non-beverage ethyl-alcohol lines (HS 2207106010, 2207106090, 2207200010, 2207200090; "
+               "litres ÷ 3.78541 = gallons), which equal EIA's fuel-ethanol exports within 0.1%. Calendar years.")
+
+
+@st.fragment
+def _run_animal_fats_tab():
+    """US animal-fat imports (tallow, poultry fat, lard and pig fat, other) from the Census Bureau; used cooking oil and mixed fats
+    (HS 1518) are shown apart because they are not all animal fat."""
+    try:
+        with st.spinner("Loading US sorghum, ethanol and animal-fat trade from the Census API…"):
+            tot = _nt_totals()["fats"]
+    except Exception as exc:
+        st.error(f"US animal-fat imports could not be read from the Census API: {exc}\n\nClick **🔄 Refresh Data** to retry.")
+        return
+    mlb = st.radio("Units", ["TMT", "Million lbs"], horizontal=True, key="fats_unit") == "Million lbs"
+    unit, unit_long, scale, dec = (("Mlb", "Million Pounds (Mlb)", _NT_MLB_PER_TMT, 1) if mlb else ("TMT", "Thousand Metric Tons (TMT)", 1.0, 1))
+    animal = tot[tot["group"].isin(_NT_FAT_GROUPS)]
+    series = {_NT_FAT_ALL: _nt_series(animal, "tmt")}
+    for g in _NT_FAT_GROUPS + [_NT_UCO]:
+        series[g] = _nt_series(tot[tot["group"] == g], "tmt")
+    accents = {_NT_FAT_ALL: "#9c7a62", "Tallow": _CH_TERRA, "Poultry fat": _CH_GOLD, "Lard & pig fat": _CH_LAV, "Other animal fats": _CH_SAGE, _NT_UCO: _CH_BLUE}
+    tiles = [_nt_tile(g, series[g], 1, accents[g], True, scale) for g in [_NT_FAT_ALL] + _NT_FAT_GROUPS]
+    st.markdown(_render_tile_grid(tiles, unit, dec), unsafe_allow_html=True)
+    lines = [(g, {k: v * scale for k, v in series[g].items()}, accents[g]) for g in [_NT_FAT_ALL, "Tallow", "Poultry fat", "Lard & pig fat"] if series[g]]
+    st.markdown(f"#### Monthly US animal-fat imports ({unit}) — last 36 months")
+    st.plotly_chart(_nt_compare_fig(lines, unit, dec), use_container_width=True)
+    st.markdown(_DIVIDER_HTML, unsafe_allow_html=True)
+    group = _nt_pick([_NT_FAT_ALL] + _NT_FAT_GROUPS + [_NT_UCO], "fats_group")
+    _nt_series_view(series[group], 1, unit, unit_long, dec, "fats", "United States", group if group != _NT_FAT_ALL else "Animal Fats", True,
+                    "US Census Bureau (general imports, HS 0209, 1501, 1502, 1503, 1506, 1516.10, 1518)", scale)
+    if st.toggle("Show where US animal-fat imports came from (by origin)", value=False, key="fats_origin_on",
+                 help="One Census call per HS line by country; loaded only when asked, then kept for six hours."):
+        try:
+            with st.spinner("Loading origins from the Census API…"):
+                d = _nt_fats_countries()
+            d = d[d["group"].isin(_NT_FAT_GROUPS)] if group == _NT_FAT_ALL else d[d["group"] == group]
+            _nt_partner_block(d.assign(vol=d["tmt"] * scale), "origin", f"US {group.lower()}", "imports", unit, dec, "fats_origin", "US Census Bureau")
+        except Exception as exc:
+            st.error(f"Origins could not be read from the Census API: {exc}")
+    st.caption("US Census Bureau general imports, HS10 lines under HS 0209 (pig and poultry fat, raw), 1501 (lard, pig fat, poultry fat), 1502 (tallow "
+               "and other bovine fats), 1503, 1506, 1516.10 (hydrogenated animal fats). 'Used cooking oil & mixed fats' is HS 1518.00 (animal or "
+               "vegetable fats and oils, chemically modified, and inedible mixtures: it includes used cooking oil) and is left out of 'All animal fats'.")
+# ═══ NEW TABS END ═══
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FLASH SALES TAB
 # Every USDA daily flash export sale (100,000 t or more of one commodity to one destination, soybean oil 20,000 t),
@@ -7500,8 +8039,9 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, insp_tab, esr_tab, flash_tab, dest_tab, vessel_tab, ref_tab = st.tabs(
-        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
+    (corn_tab, soy_tab, meal_tab, wheat_tab, sorghum_tab, ethanol_tab, fats_tab, china_tab, insp_tab, esr_tab,
+     flash_tab, dest_tab, vessel_tab, ref_tab) = st.tabs(
+        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat", "🌱  Sorghum", "⛽  Ethanol", "🥩  Animal Fats",
          "🇨🇳  China Imports", "🔍  US Inspections", "📈  Export Sales", "⚡  Flash Sales",
          "🧭  Destinations", "🚢  Vessel Lineup", "📅  Marketing Years"]
     )
@@ -7524,6 +8064,24 @@ def main():
                            unit_long, logo_white_b64)
         except Exception as _e:
             st.error(f"Wheat tab error: {_e}")
+
+    with sorghum_tab:
+        try:
+            _run_sorghum_tab(use_bushels, unit_short, unit_decimals)
+        except Exception as _e:
+            st.error(f"Sorghum tab error: {_e}")
+
+    with ethanol_tab:
+        try:
+            _run_ethanol_tab()
+        except Exception as _e:
+            st.error(f"Ethanol tab error: {_e}")
+
+    with fats_tab:
+        try:
+            _run_animal_fats_tab()
+        except Exception as _e:
+            st.error(f"Animal Fats tab error: {_e}")
 
     with china_tab:
         try:
