@@ -6940,6 +6940,7 @@ _DEST_PLACES = {
     "Brazil":                     dict(code="BR", src="tdm", owner="Brazil", flow="E"),
     "Argentina":                  dict(code="AR", src="tdm", owner="Argentina", flow="E"),
     "Ukraine":                    dict(code="UA", src="tdm", owner="Ukraine", flow="E"),
+    "Major Exporters":            dict(code="ALL", src="major", owner="Major exporters", flow="E"),     # the four above, added up
     "China (imports, by origin)": dict(code="CN", src="tdm", owner="China", flow="I"),
 }
 _TDM_COMMODITY_OF = {"205719": "corn", "205714": "soybeans", "205717": "soybeanmeal", "205713": "wheat"}
@@ -6959,6 +6960,8 @@ def _dest_my_start(code: str, commodity: str, basis: str):
         if cfg:
             return _MO_NAME_TO_NUM[cfg["us_local_months"][0]]
         return 9 if commodity == "sorghum" else None             # sorghum: USDA's Sep-Aug year
+    if code == "ALL":                                            # Major Exporters: the year their totals use elsewhere (Oct-Sep; wheat Jul-Jun)
+        return _MO_NAME_TO_NUM[cfg["nh_months"][0]] if commodity == "wheat" else 10
     field = _DEST_FIELD.get(code)
     if commodity == "wheat":
         fm = cfg["field_my"].get(field)
@@ -6982,7 +6985,7 @@ def _dest_my_options(code: str, commodity: str, first_ym: int, last_ym: int) -> 
             families.append(("US", us))
     else:
         if local is not None:
-            families.append(("local = US" if local == us else "local", local))
+            families.append(("Major Exporters" if code == "ALL" else ("local = US" if local == us else "local"), local))
         if us is not None and us != local:
             families.append(("US", us))
     out: dict = {}
@@ -6996,6 +6999,44 @@ def _dest_my_options(code: str, commodity: str, first_ym: int, last_ym: int) -> 
             out[f"{my}/{str(my + 1)[-2:]} {tag} MY{' to date' if partial else ''} ({span})"] = (start, min(start + 11, last_ym))
             my -= 1
     return out
+
+
+# The Major Exporters view adds the exporters the tab has destination data for. The two sources spell a few countries differently
+# (GATS "Korea, South", TDM "South Korea": a top destination), so GATS names are put on TDM's spelling before the rows are added up.
+_DEST_EXPORTERS = (("US", "US"), ("BR", "Brazil"), ("AR", "Argentina"), ("UA", "Ukraine"))       # code -> name, in the order shown
+_DEST_NAME_ALIAS = {"Korea, South": "South Korea", "Burma": "Myanmar", "Bahamas, The": "Bahamas", "Congo (Kinshasa)": "Congo (DROC)",
+                    "Congo (Brazzaville)": "Congo (ROC)", "St. Kitts and Nevis": "Saint Kitts and Nevis",
+                    "Uzbekistan, Republic of": "Uzbekistan"}
+_DEST_MAJOR_COLS = ["commodity", "country", "year", "month", "tmt", "value", "exporter"]
+
+
+def _dest_major_frame(gats: pd.DataFrame | None, tdm: pd.DataFrame | None) -> pd.DataFrame:
+    """The Major Exporters view's rows: for each commodity, every exporter that has it (the US from GATS; Brazil, Argentina and Ukraine from
+    TDM), kept only for the months ALL of those exporters have reported (the rule the Major Exporters total follows in the commodity tabs:
+    a month with one exporter missing would understate the total), with destination names matched across the two sources. A commodity only
+    one exporter has (sorghum, canola) is left out. Columns: commodity, country, year, month, tmt, value, exporter."""
+    parts = []
+    if gats is not None and not gats.empty:
+        g = gats[["commodity", "country", "year", "month", "tmt", "value"]].copy()
+        g["country"] = g["country"].replace(_DEST_NAME_ALIAS)
+        g["exporter"] = "US"
+        parts.append(g)
+    if tdm is not None and not tdm.empty:
+        t = tdm[(tdm["flow"] == "E") & tdm["reporter"].isin([c for c, _ in _DEST_EXPORTERS if c != "US"])].copy()
+        t["exporter"] = t["reporter"].map(dict(_DEST_EXPORTERS))
+        parts.append(t[_DEST_MAJOR_COLS])
+    if not parts:
+        return pd.DataFrame(columns=_DEST_MAJOR_COLS)
+    df = pd.concat(parts, ignore_index=True)
+    keep = []
+    for com, d in df.groupby("commodity"):
+        months = [set(zip(x["year"], x["month"])) for _, x in d.groupby("exporter")]
+        if len(months) < 2:
+            continue
+        common = list(set.intersection(*months))
+        if common:
+            keep.append(d[pd.MultiIndex.from_arrays([d["year"], d["month"]]).isin(common)])
+    return pd.concat(keep, ignore_index=True) if keep else pd.DataFrame(columns=_DEST_MAJOR_COLS)
 
 
 class _DestNotLoaded(Exception):
@@ -7075,6 +7116,17 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         if df_all.empty:
             st.info("No GATS destination data has been loaded yet. Run `python gats.py seed`, then `backfill`, on the droplet.")
             return
+    elif place["src"] == "major":
+        try:
+            tdm = _load_tdm_partner_months()
+        except _DestNotLoaded:
+            st.info("The Brazil / Argentina / Ukraine destination data has not been loaded yet (`tdm_partners.py` fills it on the droplet), "
+                    "so the exporters cannot be added up.")
+            return
+        df_all = _dest_major_frame(_load_gats_destinations(), tdm)
+        if df_all.empty:
+            st.info("No month has been reported by every major exporter yet.")
+            return
     else:
         try:
             tdm = _load_tdm_partner_months()
@@ -7093,6 +7145,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         com_label = st.selectbox("Commodity", list(com_options), key=f"dest_commodity_{place['code']}")
     com = com_options[com_label]
     df = df_all[df_all["commodity"] == com].copy()
+    exporters = ([n for _, n in _DEST_EXPORTERS if n in set(df["exporter"])] if place["src"] == "major" else [])    # Major Exporters: who is added up
 
     factor = _GATS_MBU_PER_TMT.get(com) if use_bushels else None
     unit = unit_short if (not use_bushels or factor) else "TMT"      # meal has no bushel unit: stay in TMT
@@ -7151,8 +7204,11 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     k4.metric(f"{Noun}s", f"{len(named)}", help="Countries that took any volume in the period" if flow == "E"
               else "Countries that supplied any volume in the period")
     if conf_vol > 0:
-        st.caption(f"{conf_vol / total * 100:.0f}% of the volume is reported by {owner} as '{_DEST_CONFIDENTIAL}' "
+        st.caption(f"{conf_vol / total * 100:.0f}% of the volume is reported by {'Argentina' if exporters else owner} as '{_DEST_CONFIDENTIAL}' "
                    f"(no {noun} given); it is shown as its own entry below and left out of the counts above.")
+    if exporters:
+        st.caption(f"Added up: {', '.join(exporters)}. Only the months every one of them has reported are used ({mon(first_ym)} – {mon(last_ym)}), "
+                   "so a late reporter never leaves a month short.")
 
     top_n = st.slider(f"{Noun}s shown", 5, 25, 12, key="dest_topn")
     show = by.head(top_n)
@@ -7161,16 +7217,34 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     with col_bar:
         st.markdown(f"#### Top {top_n} {noun}s — {span}")
         fig = go.Figure()
-        if have_prior:
-            fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier",
-                                 marker_color=_CH_MIST))
-        fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=_CH_BLUE,
-                             text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside",
-                             textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
+        if exporters:
+            # Major Exporters: each bar is the destination's total, split by the exporter that shipped it; a diamond marks last year's total
+            split = cur.groupby(["country", "exporter"])["vol"].sum().unstack(fill_value=0.0).reindex(show["country"]).fillna(0.0)
+            for ex in exporters:
+                if ex in split:
+                    fig.add_trace(go.Bar(y=split.index, x=split[ex], orientation="h", name=ex, marker_color=_CH_COUNTRY[ex],
+                                         hovertemplate="%{y}: %{x:,." + str(dec) + "f} " + unit + "<extra>" + ex + "</extra>"))
+            # the total's label sits beyond both the bar and last year's diamond, whichever reaches further, so the two never overlap
+            fig.add_trace(go.Scatter(y=show["country"], x=show[["vol", "prior"]].max(axis=1) if have_prior else show["vol"], mode="text",
+                                     showlegend=False, hoverinfo="skip", cliponaxis=False,
+                                     text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="middle right",
+                                     textfont=dict(color=_CH_MUTED, size=11)))
+            if have_prior:
+                fig.add_trace(go.Scatter(y=show["country"], x=show["prior"], mode="markers", name="Year earlier (all exporters)",
+                                         marker=dict(symbol="diamond", size=8, color="#ffffff", line=dict(color=_CH_TEXT, width=1.5)),
+                                         hovertemplate="%{y}: %{x:,." + str(dec) + "f} " + unit + "<extra>Year earlier</extra>"))
+        else:
+            if have_prior:
+                fig.add_trace(go.Bar(y=show["country"], x=show["prior"], orientation="h", name="Year earlier",
+                                     marker_color=_CH_MIST))
+            fig.add_trace(go.Bar(y=show["country"], x=show["vol"], orientation="h", name=span, marker_color=_CH_BLUE,
+                                 text=show["vol"].apply(lambda v: f"{v:,.{dec}f}"), textposition="outside",
+                                 textfont=dict(color=_CH_MUTED, size=11), cliponaxis=False))
         fig.update_layout(**_ch_layout(None, None, unit, None, hover="closest", height=max(340, len(show) * 34),
                                        margin=dict(l=10, r=50, t=44, b=10)))
-        fig.update_layout(barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
-                                                       bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
+        fig.update_layout(barmode="stack" if exporters else "group",
+                          legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0,
+                                      bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)"))
         fig.update_xaxes(tickformat=",")
         fig.update_yaxes(autorange="reversed", showgrid=False, automargin=True)
         st.plotly_chart(fig, use_container_width=True)
@@ -7208,29 +7282,43 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
     })
     shown = {f"Volume ({unit})": f"{{:,.{dec}f}}", "Share": "{:.1f}%", f"Year earlier ({unit})": f"{{:,.{dec}f}}",
              "Change": "{:+.1f}%", "Value ($M)": "${:,.1f}", "$/MT": "${:,.0f}"}          # how the PNG prints each column
+    cfg_cols = {
+        f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+        "Share": st.column_config.NumberColumn(format="%.1f%%"),
+        f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
+        "Change": st.column_config.NumberColumn(format="%+.1f%%"),
+        "Value ($M)": st.column_config.NumberColumn(format="$%,.1f"),
+        "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
+    }
+    if exporters:                                  # Major Exporters: one column per exporter, right after the total
+        by_ex = cur.groupby(["country", "exporter"])["vol"].sum().unstack(fill_value=0.0)
+        for i, ex in enumerate(exporters):
+            tbl.insert(2 + i, ex, by["country"].map(by_ex[ex]).fillna(0.0) if ex in by_ex else 0.0)
+            shown[ex] = f"{{:,.{dec}f}}"
+            cfg_cols[ex] = st.column_config.NumberColumn(format=f"%,.{dec}f")
     box = (png_tools.table(f"dest_detail", f"{png_tools.slug(Noun)}_detail_{png_tools.stamp()}", f"{Noun} detail: {span} ({unit})",
                            "Largest first" + (f" · {len(tbl):,} rows, the first 80 shown" if len(tbl) > 80 else ""),
-                           "Source: USDA FAS GATS (US Census Bureau)" if place["src"] == "gats" else "Source: Trade Data Monitor (TDM)",
+                           "Source: USDA FAS GATS (US Census Bureau) and Trade Data Monitor (TDM)" if exporters
+                           else "Source: USDA FAS GATS (US Census Bureau)" if place["src"] == "gats" else "Source: Trade Data Monitor (TDM)",
                            png_tools.table_html(tbl.head(80), shown, index=False))
            if png_tools else st.container())
     with box:
-        st.dataframe(
-            tbl, hide_index=True, use_container_width=True,
-            column_config={
-                f"Volume ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
-                "Share": st.column_config.NumberColumn(format="%.1f%%"),
-                f"Year earlier ({unit})": st.column_config.NumberColumn(format=f"%,.{dec}f"),
-                "Change": st.column_config.NumberColumn(format="%+.1f%%"),
-                "Value ($M)": st.column_config.NumberColumn(format="$%,.1f"),
-                "$/MT": st.column_config.NumberColumn(format="$%,.0f"),
-            },
-        )
+        st.dataframe(tbl, hide_index=True, use_container_width=True, column_config=cfg_cols)
     if place["src"] == "gats":
         st.caption(
             f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
             "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
             "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
             "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
+        )
+    elif exporters:
+        st.caption(
+            f"Source: USDA FAS GATS (US Census Bureau) for the US and Trade Data Monitor (TDM) for the others, added up by destination; data through "
+            f"{mon(last_ym)}, the newest month every exporter listed above has reported. Destination names are matched across the two sources "
+            "(GATS 'Korea, South' = TDM 'South Korea'). 'Confidential' is Argentina's shipments with no destination given. "
+            + ("For wheat this leaves out Canada, the EU, Russia and Australia, whose destinations are not loaded. " if com == "wheat" else "")
+            + "Marketing years: the Major Exporters year is the USDA Oct–Sep year the totals use in the commodity tabs (wheat Jul–Jun), "
+            "and the US year is Sep–Aug (wheat Jun–May)."
         )
     else:
         st.caption(
