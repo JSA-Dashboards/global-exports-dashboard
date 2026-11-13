@@ -6946,22 +6946,25 @@ _DEST_PLACES = {
 _TDM_COMMODITY_OF = {"205719": "corn", "205714": "soybeans", "205717": "soybeanmeal", "205713": "wheat"}
 _DEST_CONFIDENTIAL = "Confidential"        # TDM's name for shipments a country reports without a destination
 _DEST_FIELD = {"BR": "Brazil", "AR": "Argentina", "UA": "Ukraine", "CN": "China"}      # country code -> the name COMMODITY_CONFIG uses
+_DEST_MY_NOTE = ("Marketing years in the Period list: 'local' is the country's own year, 'USDA' the USDA trade year (Oct–Sep; wheat Jul–Jun) and "
+                 "'US' the US year (Sep–Aug; wheat Jun–May); a year in progress runs to the newest month loaded.")
 
 
 def _dest_my_start(code: str, commodity: str, basis: str):
-    """First month (1-12) of a marketing year: basis 'us' = the US marketing year of the commodity, 'local' = the country's own.
-    Both come from the app's own conventions (COMMODITY_CONFIG: the US Sep-Aug, Brazil and Argentina Mar-Feb for corn and Apr-Mar for
-    soybeans and meal, wheat's year per country; Ukraine corn and China's imports on the USDA Oct-Sep year). None when the app has no year
-    for the commodity (canola)."""
+    """First month (1-12) of a marketing year: basis 'us' = the US marketing year of the commodity, 'local' = the country's own, 'usda' =
+    the USDA trade year every country can be put on (Oct-Sep; wheat Jul-Jun, the year the dashboard's totals use). 'us' and 'local' come
+    from the app's own conventions (COMMODITY_CONFIG: the US Sep-Aug, Brazil and Argentina Mar-Feb for corn and Apr-Mar for soybeans and
+    meal, wheat's year per country; Ukraine corn and China's imports already on Oct-Sep). None when the app has no such year for the
+    commodity (canola has no US or local year)."""
     cfg = COMMODITY_CONFIG.get(commodity)
+    if basis == "usda":
+        return _MO_NAME_TO_NUM[cfg["nh_months"][0]] if commodity == "wheat" else 10
     if basis == "us" or code == "US":
         if commodity == "wheat":
             return _MO_NAME_TO_NUM[cfg["field_my"]["US"]["months"][0]]
         if cfg:
             return _MO_NAME_TO_NUM[cfg["us_local_months"][0]]
         return 9 if commodity == "sorghum" else None             # sorghum: USDA's Sep-Aug year
-    if code == "ALL":                                            # Major Exporters: the year their totals use elsewhere (Oct-Sep; wheat Jul-Jun)
-        return _MO_NAME_TO_NUM[cfg["nh_months"][0]] if commodity == "wheat" else 10
     field = _DEST_FIELD.get(code)
     if commodity == "wheat":
         fm = cfg["field_my"].get(field)
@@ -6974,20 +6977,18 @@ def _dest_my_start(code: str, commodity: str, basis: str):
 
 
 def _dest_my_options(code: str, commodity: str, first_ym: int, last_ym: int) -> dict:
-    """The Period picker's marketing years, newest first: the country's own year ('local') then the US marketing year, as
-    {label: (first month index, last month index)} with month index = year * 12 + month - 1. The year in progress runs to the newest
-    loaded month ('to date'); a year that began before the loaded history is left out; one list only when the two are the same year
-    (the US itself, China's wheat)."""
-    local, us = _dest_my_start(code, commodity, "local"), _dest_my_start(code, commodity, "us")
-    families = []
-    if code == "US":
-        if us is not None:
-            families.append(("US", us))
-    else:
-        if local is not None:
-            families.append(("Major Exporters" if code == "ALL" else ("local = US" if local == us else "local"), local))
-        if us is not None and us != local:
-            families.append(("US", us))
+    """The Period picker's marketing years, newest first: the country's own year ('local'), the USDA trade year (Oct-Sep; wheat Jul-Jun) and
+    the US marketing year, as {label: (first month index, last month index)} with month index = year * 12 + month - 1. The US lists its own
+    year as 'US' and the Major Exporters view has no local year. The year in progress runs to the newest loaded month ('to date'); a year
+    that began before the loaded history is left out; two conventions that are the same year are listed once ('local = USDA', 'local = US')."""
+    us, usda = _dest_my_start(code, commodity, "us"), _dest_my_start(code, commodity, "usda")
+    order = ([("US", us)] if code == "US" else [] if code == "ALL" else [("local", _dest_my_start(code, commodity, "local"))])
+    order += [("USDA", usda)] + ([] if code == "US" else [("US", us)])
+    merged: dict = {}
+    for tag, s in order:
+        if s is not None:
+            merged.setdefault(s, []).append(tag)
+    families = [(" = ".join(tags), s) for s, tags in merged.items()]
     out: dict = {}
     last_y, last_m = last_ym // 12, last_ym % 12 + 1
     for tag, s in families:
@@ -7309,7 +7310,8 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
             f"Source: USDA FAS GATS (US Census Bureau monthly trade data), domestic exports by destination, data through {mon(last_ym)}. "
             "Corn = HS 1005 (incl. seed), soybeans = HS 1201, soybean meal = HS 2304, wheat = HS 1001 (incl. durum), sorghum = HS 1007, canola = HS 1205 (rapeseed/colza seed). "
             "Census revises months for up to a year, and countries are as Census reports them (e.g. EU members appear individually). "
-            "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late."
+            "Only destinations that have ever shown grain exports are loaded, so a brand-new destination can appear a month late. "
+            + _DEST_MY_NOTE
         )
     elif exporters:
         st.caption(
@@ -7317,7 +7319,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
             f"{mon(last_ym)}, the newest month every exporter listed above has reported. Destination names are matched across the two sources "
             "(GATS 'Korea, South' = TDM 'South Korea'). 'Confidential' is Argentina's shipments with no destination given. "
             + ("For wheat this leaves out Canada, the EU, Russia and Australia, whose destinations are not loaded. " if com == "wheat" else "")
-            + "Marketing years: the Major Exporters year is the USDA Oct–Sep year the totals use in the commodity tabs (wheat Jul–Jun), "
+            + "Marketing years: the USDA year is Oct–Sep (wheat Jul–Jun), the year the Major Exporters totals use in the commodity tabs, "
             "and the US year is Sep–Aug (wheat Jun–May)."
         )
     else:
@@ -7326,7 +7328,8 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
             "Product groups: corn (ex. seed), soybeans (ex. seed), soybean meal, wheat (ex. seed). "
             "TDM revises recent months as customs data is finalised, and each country's own reporting lag differs. "
             + ("" if flow == "I" else f"Partners are the destination as {owner}'s customs record it; shipments to a "
-               "transshipment hub (e.g. the Netherlands, Singapore) are not traced further.")
+               "transshipment hub (e.g. the Netherlands, Singapore) are not traced further. ")
+            + _DEST_MY_NOTE
         )
 
 
