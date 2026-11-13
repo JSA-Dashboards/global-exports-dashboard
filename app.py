@@ -6944,6 +6944,58 @@ _DEST_PLACES = {
 }
 _TDM_COMMODITY_OF = {"205719": "corn", "205714": "soybeans", "205717": "soybeanmeal", "205713": "wheat"}
 _DEST_CONFIDENTIAL = "Confidential"        # TDM's name for shipments a country reports without a destination
+_DEST_FIELD = {"BR": "Brazil", "AR": "Argentina", "UA": "Ukraine", "CN": "China"}      # country code -> the name COMMODITY_CONFIG uses
+
+
+def _dest_my_start(code: str, commodity: str, basis: str):
+    """First month (1-12) of a marketing year: basis 'us' = the US marketing year of the commodity, 'local' = the country's own.
+    Both come from the app's own conventions (COMMODITY_CONFIG: the US Sep-Aug, Brazil and Argentina Mar-Feb for corn and Apr-Mar for
+    soybeans and meal, wheat's year per country; Ukraine corn and China's imports on the USDA Oct-Sep year). None when the app has no year
+    for the commodity (canola)."""
+    cfg = COMMODITY_CONFIG.get(commodity)
+    if basis == "us" or code == "US":
+        if commodity == "wheat":
+            return _MO_NAME_TO_NUM[cfg["field_my"]["US"]["months"][0]]
+        if cfg:
+            return _MO_NAME_TO_NUM[cfg["us_local_months"][0]]
+        return 9 if commodity == "sorghum" else None             # sorghum: USDA's Sep-Aug year
+    field = _DEST_FIELD.get(code)
+    if commodity == "wheat":
+        fm = cfg["field_my"].get(field)
+        return _MO_NAME_TO_NUM[fm["months"][0]] if fm else None
+    if cfg is None:
+        return None
+    if field in cfg.get("mar_feb_fields", ()):
+        return _MO_NAME_TO_NUM[cfg["arbr_months"][0]]
+    return 10
+
+
+def _dest_my_options(code: str, commodity: str, first_ym: int, last_ym: int) -> dict:
+    """The Period picker's marketing years, newest first: the country's own year ('local') then the US marketing year, as
+    {label: (first month index, last month index)} with month index = year * 12 + month - 1. The year in progress runs to the newest
+    loaded month ('to date'); a year that began before the loaded history is left out; one list only when the two are the same year
+    (the US itself, China's wheat)."""
+    local, us = _dest_my_start(code, commodity, "local"), _dest_my_start(code, commodity, "us")
+    families = []
+    if code == "US":
+        if us is not None:
+            families.append(("US", us))
+    else:
+        if local is not None:
+            families.append(("local = US" if local == us else "local", local))
+        if us is not None and us != local:
+            families.append(("US", us))
+    out: dict = {}
+    last_y, last_m = last_ym // 12, last_ym % 12 + 1
+    for tag, s in families:
+        span = f"{_GATS_MON[s - 1]}–{_GATS_MON[(s - 2) % 12]}"
+        my = last_y if last_m >= s else last_y - 1                    # the marketing year the newest loaded month sits in
+        while my * 12 + s - 1 >= first_ym:
+            start = my * 12 + s - 1
+            partial = start + 11 > last_ym
+            out[f"{my}/{str(my + 1)[-2:]} {tag} MY{' to date' if partial else ''} ({span})"] = (start, min(start + 11, last_ym))
+            my -= 1
+    return out
 
 
 class _DestNotLoaded(Exception):
@@ -7065,6 +7117,7 @@ def _run_destinations_tab(use_bushels: bool, unit_short: str, unit_decimals: int
         "Last 12 months": (last_ym - 11, last_ym),
         f"{ly} year to date": (ly * 12, last_ym),
     }
+    options.update(_dest_my_options(place["code"], com, first_ym, last_ym))    # marketing years: the country's own and the US's
     for y in range(ly - 1, first_ym // 12 - 1, -1):
         if y * 12 >= first_ym:
             options[f"{y} calendar year"] = (y * 12, y * 12 + 11)
